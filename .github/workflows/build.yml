@@ -1,0 +1,32 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # Starter build for this README-only repository.
+      - name: Validate and package README
+        run: |
+          test -s README.md
+          mkdir -p dist
+          cp README.md dist/README.md
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: starter-build
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
