@@ -244,6 +244,32 @@ void main() {
     },
   );
 
+  testWidgets('templates remain editable and custom clears the draft', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(home: HostScreen(session: session)),
+    );
+    await tester.tap(find.text('Activities'));
+    await tester.pump();
+    expect(find.text('Pickleball'), findsOneWidget);
+    await tester.enterText(find.byType(TextFormField).at(1), 'Tennis');
+    expect(find.text('Tennis'), findsOneWidget);
+    await tester.tap(find.text('Time'));
+    await tester.pump();
+    expect(find.text('When should we meet?'), findsOneWidget);
+    expect(find.byType(TextFormField), findsNWidgets(4));
+    await tester.tap(find.text('Custom'));
+    await tester.pump();
+    expect(find.byType(TextFormField), findsNWidgets(3));
+    for (final field in tester.widgetList<TextFormField>(
+      find.byType(TextFormField),
+    )) {
+      expect(field.controller!.text, isEmpty);
+    }
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('poll form validates empty inputs before calling server', (
     tester,
   ) async {
