@@ -308,9 +308,14 @@ class _VoteScreenState extends State<VoteScreen> {
                         const SizedBox(height: 8),
                         Text(
                           poll.status == 'open'
-                              ? '${poll.timeLeft}s remaining · ${poll.totalVotes} votes'
-                              : 'Poll closed · ${poll.totalVotes} votes',
+                              ? '${poll.timeLeft}s remaining · ${poll.totalVotes} ${poll.totalVotes == 1 ? 'vote' : 'votes'}'
+                              : 'Poll closed · ${poll.totalVotes} ${poll.totalVotes == 1 ? 'vote' : 'votes'}',
                         ),
+                        if (poll.status == 'closed')
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Text(poll.result),
+                          ),
                         if (poll.status == 'closed')
                           TextButton(
                             onPressed: () =>
@@ -355,7 +360,9 @@ class _VoteScreenState extends State<VoteScreen> {
                                       child: Row(
                                         children: [
                                           Expanded(child: Text(option.text)),
-                                          Text('${option.votes} votes'),
+                                          Text(
+                                            '${option.votes} ${option.votes == 1 ? 'vote' : 'votes'}',
+                                          ),
                                         ],
                                       ),
                                     ),
