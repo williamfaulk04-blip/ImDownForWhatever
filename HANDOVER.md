@@ -96,6 +96,7 @@ Use the environment available in your checkout:
 - Discover available devices with `flutter devices`; substitute the selected ID for `<device-id>` in the commands below.
 - From `mobile/`, run `flutter analyze`, `flutter test`, and `flutter build apk --debug -t lib/main.dart`.
 - If the host test runner cannot start, investigate the environment separately from test failures. The same widget suite can run on Android with `flutter test integration_test/widget_suite_test.dart -d <device-id>`. Record which runner actually passed.
+- To check CI font/layout behavior on Android, run `flutter run -t integration_test/widget_suite_test.dart -d <device-id> --use-test-fonts` and inspect the test summary before quitting. The home test explicitly uses CI's 800×600 viewport. Device tests with normal fonts alone missed the validation-message failure described below.
 - With the server running, run `flutter test integration_test/room_journey_test.dart -d <device-id>` for the real-server journey. Physical devices need the `FASTPOLL_API_BASE` override described in README.
 - After device tests, use `flutter run -t lib/main.dart -d <device-id>` to restore the normal app for a demo; do not leave the integration-test build installed as the demo.
 - Diagnose build warnings by their cause and final exit status. Do not equate a warning with a failed build or a runner startup failure with a passing test.
@@ -150,3 +151,9 @@ The feature and QOL builds have been demoed and received positive feedback. Docu
 ### QOL follow-up (2026-09-24)
 
 Requested QOL changes: clearer room loading, remove redundant vote-confirmed text, and a dedicated results screen. Implemented all three. Updated widget checks cover slow loading, actual progress callbacks, selection without confirmation text, results/back/heartbeat behavior, guest restrictions, and tie/zero-vote outcomes. Widget suite: **12 passed on Android**. Live-server Android journey: **1 passed**, including manual ending and natural expiration into the dedicated results screen. Normal Android debug APK: **built, installed, and launched**. Flutter analysis and diff whitespace checks: **clean**. The QOL demo received positive feedback; committing and publishing have been explicitly authorized. The reviewing developer will handle the pull request and merge.
+
+### CI test follow-up (2026-09-24)
+
+PR CI reported 11 passing Flutter tests and one failure: the home test could not find `Enter your name first.`. Reproduced locally on Android using the 800×600 viewport **and** `--use-test-fonts`; the same viewport with normal device fonts passed. The test font wraps the form enough that the validation message is an unbuilt child of the scrolling list. The test now scrolls the vertical form to the message and locates the room-code field by its label before entering text. No application behavior changed, and no assertions were removed.
+
+All **12 suite tests passed** after the fix with the test font and CI viewport (the live runner additionally counts its teardown). The native host runner still crashes before executing tests; do not claim a native `flutter test` pass. The user authorized fixing and pushing this CI follow-up to the existing development branch. Verify the new GitHub Actions result after publication; a closed pull request must be reopened by the reviewing developer for PR CI to run. Pull-request merging remains their responsibility.

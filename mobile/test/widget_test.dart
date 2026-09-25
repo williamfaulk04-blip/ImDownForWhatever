@@ -74,16 +74,27 @@ void main() {
   testWidgets('home validates name and normalizes pasted room codes', (
     tester,
   ) async {
+    // Keep the CI viewport when this suite also runs on a taller device.
+    await tester.binding.setSurfaceSize(const Size(800, 600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(const FastPollApp());
     expect(find.text('Create Room'), findsOneWidget);
     await tester.tap(find.text('Create Room'));
     await tester.pump();
-    expect(find.text('Enter your name first.'), findsOneWidget);
-    await tester.enterText(find.byType(TextField).last, ' ab-12 xyz');
-    expect(
-      tester.widget<TextField>(find.byType(TextField).last).controller!.text,
-      'AB12',
+    // Test fonts can wrap the form enough to leave this lazy child unbuilt.
+    await tester.scrollUntilVisible(
+      find.text('Enter your name first.'),
+      150,
+      scrollable: find.byWidgetPredicate(
+        (widget) =>
+            widget is Scrollable && widget.axisDirection == AxisDirection.down,
+      ),
     );
+    expect(find.text('Enter your name first.'), findsOneWidget);
+    final roomCode = find.widgetWithText(TextField, 'Room code');
+    await tester.ensureVisible(roomCode);
+    await tester.enterText(roomCode, ' ab-12 xyz');
+    expect(tester.widget<TextField>(roomCode).controller!.text, 'AB12');
   });
 
   test('formatter handles deletion and mixed-case input', () {
