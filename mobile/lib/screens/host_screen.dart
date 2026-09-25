@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 
 import '../services/api_service.dart';
-import 'vote_screen.dart';
+import '../models/poll_model.dart';
 
 class HostScreen extends StatefulWidget {
-  const HostScreen({super.key});
+  const HostScreen({required this.session, super.key});
+
+  final RoomSession session;
 
   @override
   State<HostScreen> createState() => _HostScreenState();
@@ -34,7 +36,8 @@ class _HostScreenState extends State<HostScreen> {
     setState(() => _submitting = true);
     final api = ApiService();
     try {
-      final roomCode = await api.createRoom(
+      await api.createPoll(
+        widget.session,
         topic: _topicController.text.trim(),
         options: _optionControllers
             .map((controller) => controller.text.trim())
@@ -42,13 +45,18 @@ class _HostScreenState extends State<HostScreen> {
         duration: _duration,
       );
       if (!mounted) return;
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute<void>(builder: (_) => VoteScreen(roomCode: roomCode)),
-      );
+      Navigator.of(context).pop();
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('$error')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              error is ApiFailure
+                  ? error.message
+                  : 'Could not reach the server. Please try again.',
+            ),
+          ),
+        );
       }
     } finally {
       api.close();
@@ -67,6 +75,7 @@ class _HostScreenState extends State<HostScreen> {
           children: [
             TextFormField(
               controller: _topicController,
+              maxLength: 200,
               decoration: const InputDecoration(
                 labelText: 'Topic',
                 border: OutlineInputBorder(),
@@ -81,6 +90,7 @@ class _HostScreenState extends State<HostScreen> {
                 padding: const EdgeInsets.only(bottom: 12),
                 child: TextFormField(
                   controller: entry.$2,
+                  maxLength: 100,
                   decoration: InputDecoration(
                     labelText: 'Option ${entry.$1 + 1}',
                     border: const OutlineInputBorder(),
@@ -93,16 +103,21 @@ class _HostScreenState extends State<HostScreen> {
             ),
             if (_optionControllers.length < 5)
               TextButton.icon(
-                onPressed: () => setState(
-                  () => _optionControllers.add(TextEditingController()),
-                ),
+                onPressed: _submitting
+                    ? null
+                    : () => setState(
+                        () => _optionControllers.add(TextEditingController()),
+                      ),
                 icon: const Icon(Icons.add),
                 label: const Text('Add option'),
               ),
             if (_optionControllers.length > 2)
               TextButton.icon(
-                onPressed: () =>
-                    setState(() => _optionControllers.removeLast().dispose()),
+                onPressed: _submitting
+                    ? null
+                    : () => setState(
+                        () => _optionControllers.removeLast().dispose(),
+                      ),
                 icon: const Icon(Icons.remove),
                 label: const Text('Remove last option'),
               ),
@@ -124,7 +139,7 @@ class _HostScreenState extends State<HostScreen> {
             const SizedBox(height: 24),
             FilledButton(
               onPressed: _submitting ? null : _submit,
-              child: Text(_submitting ? 'Creating…' : 'Create and open room'),
+              child: Text(_submitting ? 'Creating…' : 'Start poll'),
             ),
           ],
         ),
