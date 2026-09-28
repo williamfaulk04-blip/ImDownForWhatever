@@ -8,6 +8,7 @@ import '../services/api_service.dart';
 import 'host_screen.dart';
 import 'poll_results_screen.dart';
 import '../widgets/room_loading_view.dart';
+import '../widgets/wheel_panel.dart';
 
 class VoteScreen extends StatefulWidget {
   const VoteScreen({required this.session, this.socket, super.key});
@@ -408,6 +409,17 @@ class _VoteScreenState extends State<VoteScreen> {
                         const Text(
                           'The host can start another poll right here.',
                         ),
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 16),
+                        child: Divider(),
+                      ),
+                      WheelPanel(
+                        session: widget.session,
+                        room: room,
+                        enabled: _connected && !_busy,
+                        busy: _busy,
+                        onAction: _control,
+                      ),
                     ],
                   ],
                 ),

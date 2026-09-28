@@ -67,6 +67,61 @@ void main() {
       );
       expect(guestState!['is_host'], false);
 
+      final wheelHeaders = {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ${host.token}',
+      };
+      final categoryCreated = await http.post(
+        Uri.parse('${ApiConfig.baseUrl}/api/rooms/${host.roomCode}/categories'),
+        headers: wheelHeaders,
+        body: jsonEncode({'name': 'Games'}),
+      );
+      expect(categoryCreated.statusCode, 201);
+      final category =
+          (jsonDecode(categoryCreated.body)['categories'] as List).single
+              as Map<String, dynamic>;
+      final activityCreated = await http.post(
+        Uri.parse(
+          '${ApiConfig.baseUrl}/api/rooms/${host.roomCode}/categories/${category['id']}/activities',
+        ),
+        headers: wheelHeaders,
+        body: jsonEncode({'name': 'Mario Kart'}),
+      );
+      expect(activityCreated.statusCode, 201);
+      final categorySpin = await http.post(
+        Uri.parse(
+          '${ApiConfig.baseUrl}/api/rooms/${host.roomCode}/wheel/category-spin',
+        ),
+        headers: wheelHeaders,
+      );
+      expect(categorySpin.statusCode, 200);
+      final categorySpinId =
+          (jsonDecode(categorySpin.body)['wheel'] as Map)['spin_id'];
+      await waitFor(
+        tester,
+        () =>
+            guestState!['wheel']?['spin_id'] == categorySpinId &&
+            guestState!['wheel']?['phase'] == 'category',
+      );
+      expect(guestState!['wheel']['result'], 'Games');
+      final activitySpin = await http.post(
+        Uri.parse(
+          '${ApiConfig.baseUrl}/api/rooms/${host.roomCode}/wheel/activity-spin',
+        ),
+        headers: wheelHeaders,
+      );
+      expect(activitySpin.statusCode, 200);
+      final activitySpinId =
+          (jsonDecode(activitySpin.body)['wheel'] as Map)['spin_id'];
+      await waitFor(
+        tester,
+        () =>
+            guestState!['wheel']?['spin_id'] == activitySpinId &&
+            guestState!['wheel']?['phase'] == 'activity',
+      );
+      expect(guestState!['wheel']['selected_category_id'], category['id']);
+      expect(guestState!['wheel']['result'], 'Mario Kart');
+
       final toggle = find.byType(SwitchListTile);
       await tester.ensureVisible(toggle);
       await tester.tap(toggle);
@@ -145,6 +200,8 @@ void main() {
       await waitFor(tester, () => guestState != null);
       expect((guestState!['poll'] as Map)['selected_option'], 1);
       expect(guestState!['is_open'], false);
+      expect(guestState!['wheel']['spin_id'], activitySpinId);
+      expect(guestState!['wheel']['selected_activity_id'], isNotNull);
 
       // Both manual ending and natural expiration must switch the host UI.
       final secondId = (guestState!['poll'] as Map)['id'];

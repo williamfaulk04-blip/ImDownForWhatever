@@ -1,3 +1,5 @@
+import 'wheel_model.dart';
+
 class RoomSession {
   const RoomSession({
     required this.roomCode,
@@ -76,11 +78,20 @@ class RoomState {
       participants = (json['participants'] as List)
           .map((p) => Participant.fromJson(p as Map<String, dynamic>))
           .toList(),
+      categories = ((json['categories'] as List?) ?? const [])
+          .map(
+            (category) =>
+                WheelCategory.fromJson(category as Map<String, dynamic>),
+          )
+          .toList(),
+      wheel = WheelState.fromJson(json['wheel'] as Map<String, dynamic>?),
       poll = json['poll'] == null
           ? null
           : PollState.fromJson(json['poll'] as Map<String, dynamic>);
   final bool isHost;
   final bool isOpen;
   final List<Participant> participants;
+  final List<WheelCategory> categories;
+  final WheelState wheel;
   final PollState? poll;
 }

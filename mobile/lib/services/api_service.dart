@@ -146,6 +146,76 @@ class ApiService {
     );
   }
 
+  Future<void> addCategory(RoomSession session, String name) =>
+      _wheelRequest(session, 'POST', '/categories', body: {'name': name});
+
+  Future<void> renameCategory(
+    RoomSession session,
+    String categoryId,
+    String name,
+  ) => _wheelRequest(
+    session,
+    'PATCH',
+    '/categories/$categoryId',
+    body: {'name': name},
+  );
+
+  Future<void> removeCategory(RoomSession session, String categoryId) =>
+      _wheelRequest(session, 'DELETE', '/categories/$categoryId');
+
+  Future<void> addActivity(
+    RoomSession session,
+    String categoryId,
+    String name,
+  ) => _wheelRequest(
+    session,
+    'POST',
+    '/categories/$categoryId/activities',
+    body: {'name': name},
+  );
+
+  Future<void> renameActivity(
+    RoomSession session,
+    String categoryId,
+    String activityId,
+    String name,
+  ) => _wheelRequest(
+    session,
+    'PATCH',
+    '/categories/$categoryId/activities/$activityId',
+    body: {'name': name},
+  );
+
+  Future<void> removeActivity(
+    RoomSession session,
+    String categoryId,
+    String activityId,
+  ) => _wheelRequest(
+    session,
+    'DELETE',
+    '/categories/$categoryId/activities/$activityId',
+  );
+
+  Future<void> spinCategory(RoomSession session) =>
+      _wheelRequest(session, 'POST', '/wheel/category-spin');
+
+  Future<void> spinActivity(RoomSession session) =>
+      _wheelRequest(session, 'POST', '/wheel/activity-spin');
+
+  Future<void> _wheelRequest(
+    RoomSession session,
+    String method,
+    String suffix, {
+    Map<String, dynamic>? body,
+  }) async {
+    await _request(
+      method,
+      '/api/rooms/${session.roomCode}$suffix',
+      session: session,
+      body: body,
+    );
+  }
+
   void close() => _client.close();
 }
 

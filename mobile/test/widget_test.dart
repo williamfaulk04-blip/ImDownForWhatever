@@ -8,6 +8,7 @@ import 'package:fastpoll/screens/host_screen.dart';
 import 'package:fastpoll/screens/vote_screen.dart';
 import 'package:fastpoll/screens/poll_results_screen.dart';
 import 'package:fastpoll/widgets/room_loading_view.dart';
+import 'package:fastpoll/widgets/wheel_panel.dart';
 import 'package:fastpoll/services/api_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -52,6 +53,15 @@ Map<String, dynamic> state({
   'participants': [
     {'name': 'Alex', 'is_host': host, 'online': true},
   ],
+  'categories': <Map<String, dynamic>>[],
+  'wheel': {
+    'spin_id': null,
+    'phase': null,
+    'selected_category_id': null,
+    'selected_activity_id': null,
+    'result': null,
+    'status': 'idle',
+  },
   'poll': pollId == null
       ? null
       : {
@@ -403,5 +413,142 @@ void main() {
     expect(PollState.fromJson(json).result, 'It’s a tie: Tacos & Pizza');
     json['winner_ids'] = <int>[];
     expect(PollState.fromJson(json).result, 'No votes this round');
+  });
+
+  test('room snapshot parses authoritative two-stage wheel state', () {
+    final snapshot = state()
+      ..['categories'] = [
+        {
+          'id': 'food',
+          'name': 'Food',
+          'activities': [
+            {'id': 'tacos', 'name': 'Tacos'},
+          ],
+        },
+      ];
+    snapshot['wheel'] = {
+      'spin_id': 'server-spin-1',
+      'phase': 'activity',
+      'selected_category_id': 'food',
+      'selected_activity_id': 'tacos',
+      'result': 'Tacos',
+      'status': 'finished',
+    };
+    final room = RoomState.fromJson(snapshot);
+    expect(room.categories.single.activities.single.name, 'Tacos');
+    expect(room.wheel.spinId, 'server-spin-1');
+    expect(room.wheel.phase, 'activity');
+    expect(room.wheel.selectedCategoryId, 'food');
+    expect(room.wheel.selectedActivityId, 'tacos');
+    expect(room.wheel.result, 'Tacos');
+    expect(room.wheel.status, 'finished');
+  });
+
+  test(
+    'spin API sends host request without a client-selected result',
+    () async {
+      final api = ApiService(
+        client: MockClient((request) async {
+          expect(request.method, 'POST');
+          expect(request.url.path, '/api/rooms/AB12/wheel/category-spin');
+          expect(request.headers['authorization'], 'Bearer ${session.token}');
+          expect(request.body, isEmpty);
+          return http.Response('{}', 200);
+        }),
+      );
+      await api.spinCategory(session);
+      api.close();
+    },
+  );
+
+  testWidgets('wheel exposes host controls and guests observe server result', (
+    tester,
+  ) async {
+    final socket = FakeRoomSocket();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: VoteScreen(session: session, socket: socket),
+      ),
+    );
+    final guestState = state();
+    guestState['categories'] = [
+      {
+        'id': 'games',
+        'name': 'Games',
+        'activities': [
+          {'id': 'kart', 'name': 'Mario Kart'},
+        ],
+      },
+    ];
+    guestState['wheel'] = {
+      'spin_id': 'server-spin-2',
+      'phase': 'activity',
+      'selected_category_id': 'games',
+      'selected_activity_id': 'kart',
+      'result': 'Mario Kart',
+      'status': 'finished',
+    };
+    socket.controller.add(guestState);
+    await tester.pump();
+    expect(find.text('Mario Kart'), findsWidgets);
+    expect(
+      find.text('The host controls category and activity spins.'),
+      findsOneWidget,
+    );
+    expect(find.text('Spin category wheel'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+
+    final hostSocket = FakeRoomSocket();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: VoteScreen(session: session, socket: hostSocket),
+      ),
+    );
+    hostSocket.controller.add({...guestState, 'is_host': true});
+    await tester.pump();
+    await tester.scrollUntilVisible(
+      find.text('Two-stage wheel'),
+      250,
+      scrollable: find.byWidgetPredicate(
+        (widget) =>
+            widget is Scrollable && widget.axisDirection == AxisDirection.down,
+      ),
+    );
+    expect(find.byType(WheelPanel), findsOneWidget);
+    expect(find.text('Spin category wheel'), findsOneWidget);
+    expect(find.text('Spin activity wheel'), findsOneWidget);
+    expect(find.text('Add category'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('saving wheel category dialog during exit transition is safe', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: WheelPanel(
+            session: session,
+            room: RoomState.fromJson(state(host: true)),
+            enabled: true,
+            busy: false,
+            onAction: (_) async {},
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Add category'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'Games');
+    await tester.tap(find.text('Save'));
+    await tester.pump();
+
+    // Remove the route while its reverse transition is still running. The
+    // dialog state must retain ownership of the TextField controller until
+    // the dialog is actually disposed.
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
   });
 }
