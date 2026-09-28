@@ -8,13 +8,14 @@ import math
 import secrets
 import string
 import time
-from typing import Annotated, Optional
+from typing import Annotated, Literal, Optional
 
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field, StringConstraints
 
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=40)]
 Option = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+WheelName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
 
 
 class JoinRequest(BaseModel):
@@ -30,6 +31,10 @@ class PollCreate(BaseModel):
 
 class RoomAccess(BaseModel):
     is_open: bool = Field(strict=True)
+
+
+class WheelNameRequest(BaseModel):
+    name: WheelName
 
 
 @dataclass
@@ -49,12 +54,37 @@ class Poll:
 
 
 @dataclass
+class WheelActivity:
+    id: str
+    name: str
+
+
+@dataclass
+class WheelCategory:
+    id: str
+    name: str
+    activities: list[WheelActivity] = field(default_factory=list)
+
+
+@dataclass
+class WheelState:
+    spin_id: Optional[str] = None
+    phase: Optional[Literal["category", "activity"]] = None
+    selected_category_id: Optional[str] = None
+    selected_activity_id: Optional[str] = None
+    result: Optional[str] = None
+    status: Literal["idle", "finished"] = "idle"
+
+
+@dataclass
 class Room:
     code: str
     host_id: str
     members: dict[str, Member]  # private token -> public participant
     is_open: bool = True
     poll: Optional[Poll] = None
+    categories: list[WheelCategory] = field(default_factory=list)
+    wheel: WheelState = field(default_factory=WheelState)
     connections: dict[WebSocket, str] = field(default_factory=dict)
     broadcast_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -94,7 +124,42 @@ def _state(room: Room, token: str) -> dict:
         "participants": [{"id": m.id, "name": m.name, "is_host": m.id == room.host_id,
                           "online": t in online} for t, m in room.members.items()],
         "poll": poll_state,
+        "categories": [
+            {
+                "id": category.id,
+                "name": category.name,
+                "activities": [
+                    {"id": activity.id, "name": activity.name}
+                    for activity in category.activities
+                ],
+            }
+            for category in room.categories
+        ],
+        "wheel": {
+            "spin_id": room.wheel.spin_id,
+            "phase": room.wheel.phase,
+            "selected_category_id": room.wheel.selected_category_id,
+            "selected_activity_id": room.wheel.selected_activity_id,
+            "result": room.wheel.result,
+            "status": room.wheel.status,
+        },
     }
+
+
+def _category(room: Room, category_id: str) -> WheelCategory:
+    category = next((item for item in room.categories if item.id == category_id), None)
+    if category is None:
+        raise HTTPException(404, "Category not found.")
+    return category
+
+
+def _check_unique_name(names: list[str], name: str, kind: str) -> None:
+    if any(existing.casefold() == name.casefold() for existing in names):
+        raise HTTPException(422, f"Give each {kind} a different name.")
+
+
+def _reset_wheel(room: Room) -> None:
+    room.wheel = WheelState()
 
 
 async def _broadcast(room: Room) -> None:
@@ -187,6 +252,129 @@ async def set_access(code: str, payload: RoomAccess, authorization: Optional[str
     room = _room(code)
     token = _member(room, authorization, host=True)
     room.is_open = payload.is_open
+    await _broadcast(room)
+    return _state(room, token)
+
+
+@app.post("/api/rooms/{code}/categories", status_code=201)
+async def add_category(code: str, payload: WheelNameRequest, authorization: Optional[str] = Header(default=None)):
+    room = _room(code)
+    token = _member(room, authorization, host=True)
+    _check_unique_name([category.name for category in room.categories], payload.name, "category")
+    room.categories.append(WheelCategory(secrets.token_hex(12), payload.name))
+    await _broadcast(room)
+    return _state(room, token)
+
+
+@app.patch("/api/rooms/{code}/categories/{category_id}")
+async def rename_category(code: str, category_id: str, payload: WheelNameRequest, authorization: Optional[str] = Header(default=None)):
+    room = _room(code)
+    token = _member(room, authorization, host=True)
+    category = _category(room, category_id)
+    _check_unique_name([item.name for item in room.categories if item.id != category_id], payload.name, "category")
+    category.name = payload.name
+    if room.wheel.selected_category_id == category_id and room.wheel.phase == "category":
+        room.wheel.result = category.name
+    await _broadcast(room)
+    return _state(room, token)
+
+
+@app.delete("/api/rooms/{code}/categories/{category_id}")
+async def remove_category(code: str, category_id: str, authorization: Optional[str] = Header(default=None)):
+    room = _room(code)
+    token = _member(room, authorization, host=True)
+    category = _category(room, category_id)
+    room.categories.remove(category)
+    if room.wheel.selected_category_id == category_id:
+        _reset_wheel(room)
+    await _broadcast(room)
+    return _state(room, token)
+
+
+@app.post("/api/rooms/{code}/categories/{category_id}/activities", status_code=201)
+async def add_activity(code: str, category_id: str, payload: WheelNameRequest, authorization: Optional[str] = Header(default=None)):
+    room = _room(code)
+    token = _member(room, authorization, host=True)
+    category = _category(room, category_id)
+    _check_unique_name([activity.name for activity in category.activities], payload.name, "activity")
+    category.activities.append(WheelActivity(secrets.token_hex(12), payload.name))
+    await _broadcast(room)
+    return _state(room, token)
+
+
+@app.patch("/api/rooms/{code}/categories/{category_id}/activities/{activity_id}")
+async def rename_activity(code: str, category_id: str, activity_id: str, payload: WheelNameRequest, authorization: Optional[str] = Header(default=None)):
+    room = _room(code)
+    token = _member(room, authorization, host=True)
+    category = _category(room, category_id)
+    activity = next((item for item in category.activities if item.id == activity_id), None)
+    if activity is None:
+        raise HTTPException(404, "Activity not found.")
+    _check_unique_name([item.name for item in category.activities if item.id != activity_id], payload.name, "activity")
+    activity.name = payload.name
+    if room.wheel.selected_category_id == category_id and room.wheel.selected_activity_id == activity_id:
+        room.wheel.result = activity.name
+    await _broadcast(room)
+    return _state(room, token)
+
+
+@app.delete("/api/rooms/{code}/categories/{category_id}/activities/{activity_id}")
+async def remove_activity(code: str, category_id: str, activity_id: str, authorization: Optional[str] = Header(default=None)):
+    room = _room(code)
+    token = _member(room, authorization, host=True)
+    category = _category(room, category_id)
+    activity = next((item for item in category.activities if item.id == activity_id), None)
+    if activity is None:
+        raise HTTPException(404, "Activity not found.")
+    category.activities.remove(activity)
+    if room.wheel.selected_category_id == category_id and room.wheel.selected_activity_id == activity_id:
+        _reset_wheel(room)
+    await _broadcast(room)
+    return _state(room, token)
+
+
+@app.post("/api/rooms/{code}/wheel/category-spin")
+async def spin_category(code: str, authorization: Optional[str] = Header(default=None)):
+    room = _room(code)
+    token = _member(room, authorization, host=True)
+    if not room.categories:
+        raise HTTPException(409, "Add at least one category before spinning.")
+    category = secrets.choice(room.categories)
+    room.wheel = WheelState(
+        spin_id=secrets.token_hex(16),
+        phase="category",
+        selected_category_id=category.id,
+        result=category.name,
+        status="finished",
+    )
+    await _broadcast(room)
+    return _state(room, token)
+
+
+@app.post("/api/rooms/{code}/wheel/activity-spin")
+async def spin_activity(code: str, authorization: Optional[str] = Header(default=None)):
+    room = _room(code)
+    token = _member(room, authorization, host=True)
+    if room.wheel.selected_category_id is None:
+        raise HTTPException(409, "Spin for a category first.")
+    category = next(
+        (item for item in room.categories if item.id == room.wheel.selected_category_id),
+        None,
+    )
+    if category is None:
+        _reset_wheel(room)
+        raise HTTPException(409, "The selected category is no longer available.")
+    if not category.activities:
+        raise HTTPException(409, "Add at least one activity to the selected category before spinning.")
+    activity = secrets.choice(category.activities)
+    room.wheel = WheelState(
+        spin_id=secrets.token_hex(16),
+        phase="activity",
+        selected_category_id=category.id,
+        selected_activity_id=activity.id,
+        result=activity.name,
+        status="finished",
+    )
     await _broadcast(room)
     return _state(room, token)
 

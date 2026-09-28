@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from server.main import app, rooms
+import server.main as main
 
 
 @pytest.fixture
@@ -211,3 +212,151 @@ def test_malformed_authentication_closes_socket(client):
         with pytest.raises(WebSocketDisconnect) as closed:
             socket.receive_json()
         assert closed.value.code == 4401
+
+
+def add_category(client, host, name):
+    return client.post(
+        f'/api/rooms/{host["room_code"]}/categories',
+        headers=headers(host),
+        json={'name': name},
+    )
+
+
+def add_activity(client, host, category_id, name):
+    return client.post(
+        f'/api/rooms/{host["room_code"]}/categories/{category_id}/activities',
+        headers=headers(host),
+        json={'name': name},
+    )
+
+
+def test_wheel_empty_and_invalid_selection_errors(client):
+    host = make_room(client)
+    path = f'/api/rooms/{host["room_code"]}/wheel'
+    assert client.post(path + '/category-spin', headers=headers(host)).status_code == 409
+    assert client.post(path + '/activity-spin', headers=headers(host)).status_code == 409
+    assert add_category(client, host, 'Games').status_code == 201
+    category = rooms[host['room_code']].categories[0]
+    assert client.post(path + '/activity-spin', headers=headers(host)).status_code == 409
+    assert client.patch(
+        f'/api/rooms/{host["room_code"]}/categories/missing',
+        headers=headers(host), json={'name': 'Renamed'},
+    ).status_code == 404
+    assert client.post(
+        f'/api/rooms/{host["room_code"]}/categories/missing/activities',
+        headers=headers(host), json={'name': 'Tennis'},
+    ).status_code == 404
+    assert client.patch(
+        f'/api/rooms/{host["room_code"]}/categories/{category.id}/activities/missing',
+        headers=headers(host), json={'name': 'Tennis'},
+    ).status_code == 404
+    assert client.delete(
+        f'/api/rooms/{host["room_code"]}/categories/{category.id}/activities/missing',
+        headers=headers(host),
+    ).status_code == 404
+    assert category.activities == []
+
+
+def test_wheel_edits_are_host_only_and_support_category_activity_crud(client):
+    host = make_room(client)
+    friend = join(client, host)
+    path = f'/api/rooms/{host["room_code"]}'
+    assert client.post(path + '/categories', headers=headers(friend), json={'name': 'Games'}).status_code == 403
+    category_state = add_category(client, host, 'Games')
+    assert category_state.status_code == 201
+    category = category_state.json()['categories'][0]
+    assert category['name'] == 'Games' and category['activities'] == []
+    assert add_category(client, host, 'games').status_code == 422
+    assert client.patch(
+        path + f'/categories/{category["id"]}', headers=headers(friend), json={'name': 'Play'}
+    ).status_code == 403
+    state = client.patch(
+        path + f'/categories/{category["id"]}', headers=headers(host), json={'name': 'Play'}
+    ).json()
+    assert state['categories'][0]['name'] == 'Play'
+    activity_state = add_activity(client, host, category['id'], 'Mario Kart')
+    activity = activity_state.json()['categories'][0]['activities'][0]
+    assert activity['name'] == 'Mario Kart'
+    activity_path = path + f'/categories/{category["id"]}/activities/{activity["id"]}'
+    assert client.patch(activity_path, headers=headers(friend), json={'name': 'Kart'}).status_code == 403
+    assert client.delete(activity_path, headers=headers(friend)).status_code == 403
+    renamed = client.patch(activity_path, headers=headers(host), json={'name': 'Kart'}).json()
+    assert renamed['categories'][0]['activities'][0]['name'] == 'Kart'
+    removed = client.delete(activity_path, headers=headers(host)).json()
+    assert removed['categories'][0]['activities'] == []
+    assert client.delete(path + f'/categories/{category["id"]}', headers=headers(friend)).status_code == 403
+    assert client.delete(path + f'/categories/{category["id"]}', headers=headers(host)).json()['categories'] == []
+
+
+def test_server_authoritative_spins_broadcast_and_restore_current_wheel(client, monkeypatch):
+    host = make_room(client)
+    friend = join(client, host)
+    add_category(client, host, 'Games')
+    add_category(client, host, 'Food')
+    categories = rooms[host['room_code']].categories
+    add_activity(client, host, categories[1].id, 'Tacos')
+    add_activity(client, host, categories[1].id, 'Pizza')
+    # Selection is made by the server's chooser; the request contains no result.
+    monkeypatch.setattr(main.secrets, 'choice', lambda choices: choices[-1])
+    url = f'/ws/{host["room_code"]}'
+    with client.websocket_connect(url) as a, client.websocket_connect(url) as b:
+        authenticate(a, host)
+        authenticate(b, friend)
+        path = f'/api/rooms/{host["room_code"]}/wheel'
+        category_response = client.post(path + '/category-spin', headers=headers(host))
+        assert category_response.status_code == 200
+        category_wheel = category_response.json()['wheel']
+        assert category_wheel['phase'] == 'category'
+        assert category_wheel['status'] == 'finished'
+        assert category_wheel['selected_category_id'] == categories[1].id
+        assert category_wheel['result'] == 'Food'
+        assert category_wheel['spin_id']
+        for socket in (a, b):
+            update = until(socket, lambda event: event.get('wheel', {}).get('spin_id') == category_wheel['spin_id'])
+            assert update['wheel'] == category_wheel
+
+        activity_response = client.post(path + '/activity-spin', headers=headers(host))
+        activity_wheel = activity_response.json()['wheel']
+        assert activity_wheel['phase'] == 'activity'
+        assert activity_wheel['selected_category_id'] == categories[1].id
+        assert activity_wheel['selected_activity_id'] == categories[1].activities[1].id
+        assert activity_wheel['result'] == 'Pizza'
+        assert activity_wheel['spin_id'] != category_wheel['spin_id']
+        for socket in (a, b):
+            update = until(socket, lambda event: event.get('wheel', {}).get('spin_id') == activity_wheel['spin_id'])
+            assert update['wheel'] == activity_wheel
+
+        # Re-spinning a category starts a fresh category phase and clears activity.
+        respun = client.post(path + '/category-spin', headers=headers(host)).json()['wheel']
+        assert respun['spin_id'] != activity_wheel['spin_id']
+        assert respun['phase'] == 'category'
+        assert respun['selected_activity_id'] is None
+
+    # A new authenticated socket receives the current snapshot, not a replay dependency.
+    with client.websocket_connect(url) as reconnected:
+        snapshot = authenticate(reconnected, friend)
+        assert snapshot['wheel'] == respun
+
+
+def test_activity_spin_rejects_guest_and_empty_selected_category(client):
+    host = make_room(client)
+    friend = join(client, host)
+    category = add_category(client, host, 'Games').json()['categories'][0]
+    path = f'/api/rooms/{host["room_code"]}/wheel'
+    assert client.post(path + '/category-spin', headers=headers(friend)).status_code == 403
+    client.post(path + '/category-spin', headers=headers(host))
+    assert client.post(path + '/activity-spin', headers=headers(friend)).status_code == 403
+    assert client.post(path + '/activity-spin', headers=headers(host)).status_code == 409
+    assert add_activity(client, host, category['id'], 'Minecraft').status_code == 201
+    selected = client.post(path + '/activity-spin', headers=headers(host)).json()['wheel']
+    assert selected['phase'] == 'activity'
+    assert selected['selected_category_id'] == category['id']
+    assert selected['result'] == 'Minecraft'
+    cleared = client.delete(
+        f'/api/rooms/{host["room_code"]}/categories/{category["id"]}/activities/{selected["selected_activity_id"]}',
+        headers=headers(host),
+    ).json()['wheel']
+    assert cleared['spin_id'] is None
+    assert cleared['phase'] is None
+    assert cleared['selected_category_id'] is None
+    assert cleared['selected_activity_id'] is None

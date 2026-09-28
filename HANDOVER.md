@@ -32,17 +32,19 @@ Updated: 2026-09-24. Treat this as project context; the user's current instructi
 
 | File | Responsibility |
 |---|---|
-| `server/main.py` | Pydantic request validation, Room/Member/Poll state, host authorization, REST, authenticated WebSocket voting, lifespan ticker |
-| `server/test_main.py` | REST/WebSocket permission, expiration, validation, first-vote, reconnect, tie, second-poll coverage |
-| `mobile/lib/models/poll_model.dart` | Typed session, participant, room and poll snapshots; result labels |
-| `mobile/lib/services/api_service.dart` | REST, session persistence, socket authentication/retry |
+| `server/main.py` | Pydantic request validation, Room/Member/Poll/Wheel state, host authorization, REST, authenticated WebSocket voting, lifespan ticker |
+| `server/test_main.py` | REST/WebSocket permission, expiration, validation, polls, wheel editing/spins/broadcasts/reconnect |
+| `mobile/lib/models/poll_model.dart` | Typed session, participant, room and poll snapshots; result labels; incorporates wheel snapshot |
+| `mobile/lib/models/wheel_model.dart` | Typed category, activity, and authoritative wheel result models |
+| `mobile/lib/services/api_service.dart` | REST, session persistence, socket authentication/retry, host wheel editing and spin requests |
+| `mobile/lib/widgets/wheel_panel.dart` | Category/activity list, host editing and spins, guest observation, authoritative result display |
 | `mobile/lib/screens/home_screen.dart` | Name, create/join room, code input formatting |
 | `mobile/lib/screens/host_screen.dart` | Poll creation form within an existing room |
 | `mobile/lib/screens/vote_screen.dart` | Room coordinator, lobby/host/voting controls, socket lifetime, results transition and back handling |
 | `mobile/lib/screens/poll_results_screen.dart` | Dedicated winner/tie/no-vote screen, tallies, back and next-poll actions |
 | `mobile/lib/widgets/room_loading_view.dart` | Bottom progress bar, current status, five-second slow-connection message |
-| `mobile/test/widget_test.dart` | Twelve UI/model/service checks using fake sockets and mock preferences/HTTP |
-| `mobile/integration_test/widget_suite_test.dart` | Executes those same twelve checks on Android |
+| `mobile/test/widget_test.dart` | UI/model/service checks using fake sockets and mock preferences/HTTP; currently 16 tests |
+| `mobile/integration_test/widget_suite_test.dart` | Executes the same widget suite on Android |
 | `mobile/integration_test/room_journey_test.dart` | Host Flutter UI and a second real network session against a running server |
 | `.github/workflows/ci.yml` | Existing real server/mobile CI; not changed in this slice |
 | `.github/workflows/build.yml` | Legacy README artifact workflow; not app verification |
@@ -57,6 +59,10 @@ Base URL: `http://10.0.2.2:8000` on Android emulator. Override with `--dart-defi
 - `PATCH /api/rooms/{code}` with `{"is_open":false}` → personalized room snapshot. Host only.
 - `POST /api/rooms/{code}/polls` with `{topic, options, duration}` → 201 room snapshot. Host only; reject if a poll is still open. Duration is integer seconds, 1–3600. Topic max 200; 2–5 distinct nonblank options, max 100 each.
 - `POST /api/rooms/{code}/polls/{poll_id}/close` → room snapshot. Host only; poll ID must be current. Repeated close of the same poll is safe.
+- `POST /api/rooms/{code}/categories` with `{"name":"Games"}`; `PATCH`/`DELETE /api/rooms/{code}/categories/{category_id}`.
+- `POST /api/rooms/{code}/categories/{category_id}/activities` with `{"name":"Mario Kart"}`; `PATCH`/`DELETE /api/rooms/{code}/categories/{category_id}/activities/{activity_id}`.
+- `POST /api/rooms/{code}/wheel/category-spin` chooses a category on the server and clears any old activity result. `POST /api/rooms/{code}/wheel/activity-spin` chooses from the current category and retains that category. All wheel editing and spin routes are host-only.
+- Category/activity names are trimmed, nonblank, at most 100 characters, and unique case-insensitively within their list. Missing IDs return 404; empty spin lists or an activity spin without a usable selected category return 409.
 - Host endpoints take `Authorization: Bearer <session_token>`. Never send tokens in room broadcasts or expose them in UI/logs.
 - `WS /ws/{code}`: first frame `{"session_token":"..."}` within 10 seconds. Unknown room closes 4404; invalid token closes 4401.
 - Vote frame: `{"action":"CAST_VOTE","poll_id":"...","option_id":0}`. Invalid messages produce `{event:"ERROR", message:"..."}`.
@@ -79,6 +85,15 @@ Snapshot shape:
     "options": [{"id":0,"text":"Tacos","votes":0},{"id":1,"text":"Pizza","votes":0}],
     "selected_option": null,
     "winner_ids": []
+  },
+  "categories": [{"id":"category-id","name":"Games","activities":[{"id":"activity-id","name":"Mario Kart"}]}],
+  "wheel": {
+    "spin_id":"server-generated-id",
+    "phase":"activity",
+    "selected_category_id":"category-id",
+    "selected_activity_id":"activity-id",
+    "result":"Mario Kart",
+    "status":"finished"
   }
 }
 ```
@@ -116,7 +131,7 @@ Demo checklist before committing:
 - In-memory single-process storage. No database, room recovery, room deletion/TTL, multi-worker pub/sub, or historical poll collection. Only the latest poll is retained; old rooms/members currently accumulate until restart.
 - Private bearer sessions are not accounts. Clearing app data or joining from another installation can create another voter; this is not abuse-proof identity. Tokens in `shared_preferences` are not encrypted secure storage. Use platform secure storage and HTTPS/WSS before a public launch.
 - No host transfer, kick/ban, permanent room close, or explicit membership deletion. Back means disconnect/away, not leave permanently.
-- No category/activity data model, wheel endpoint, synchronized spin, or wheel UI yet.
+- Wheel results are immediate server decisions. The client animates the relevant category/activity wheel toward the authoritative selected segment; the server does not wait for animation completion.
 - No iOS/macOS/web platform scaffold; Android is the current target.
 - Reconnect has no jitter or application-level dead-connection timeout. A silently blackholed connection may need stronger heartbeat detection. Server send timeouts drop stale sockets from the room list.
 - Network retry/session persistence tests cover key state behavior, but airplane-mode/process-kill testing on physical phones remains outstanding.
@@ -126,11 +141,10 @@ Demo checklist before committing:
 
 ## Next work, in order
 
-1. **Coordinate the handoff.** The feature, QOL, and documentation review is complete. The reviewing developer will create the pull request and merge; do not create or merge it on their behalf. Before new development, check whether that merge has completed and start a fresh feature branch from updated `main`.
-2. **Add the two-stage wheel feature.** First define categories with editable activity lists per room. Examples: Games → Mario Kart/Minecraft; Food → Tacos/Pizza; Go out → Bowling/Park; Movies → chosen titles. Host edits/spins; members observe. Store a server-generated spin ID, phase (category/activity), chosen ID, and result in room state. Choose the result once on the server and broadcast it; the client animation must land on that result. Reconnect must restore it. Define empty-list and re-spin behavior and test host rejection, same result across clients, and category-to-activity selection. Do not invent movie/location recommendation APIs unless requested.
-3. **Persistence and lifecycle.** Decide with the team whether a durable single-server store is enough. Separate storage access from route handlers, persist rooms/members/polls, introduce room expiry and a deliberate host recovery policy. Multiple workers require shared broadcasts as well as a shared database; a database alone does not solve sockets. Keep tokens private at rest and in queries.
-4. **Reliability and real devices.** Run the README flow on two physical Android devices over LAN; cover app background/resume, airplane mode, failed vote confirmation, host reconnect, and server restart. Add heartbeat timeout/backoff jitter where the observed behavior warrants it.
-5. **Team housekeeping.** Enable branch protection/required server and mobile CI checks if requested by the team; consider retiring the legacy README-only Build workflow. Pin tool/dependency versions for repeatability. Rename internal FastPoll identifiers only in a separate coordinated change if desired.
+1. **Review and demo the wheel feature.** The implementation is on `codex/wheel-feature`. Complete Android device/demo validation when the SDK/device runner is available, then follow the team's established review and pull-request ownership before landing it.
+2. **Persistence and lifecycle.** Decide with the team whether a durable single-server store is enough. Separate storage access from route handlers, persist rooms/members/polls/wheel data, introduce room expiry and a deliberate host recovery policy. Multiple workers require shared broadcasts as well as a shared database; a database alone does not solve sockets. Keep tokens private at rest and in queries.
+3. **Reliability and real devices.** Run the README flow on two physical Android devices over LAN; cover app background/resume, airplane mode, failed vote confirmation, host reconnect, and server restart. Add heartbeat timeout/backoff jitter where the observed behavior warrants it. Demo the category/activity editor and both spins on Android when the SDK/device runner is available.
+4. **Team housekeeping.** Enable branch protection/required server and mobile CI checks if requested by the team; consider retiring the legacy README-only Build workflow. Pin tool/dependency versions for repeatability. Rename internal FastPoll identifiers only in a separate coordinated change if desired.
 
 When changing the contract: update Python schemas/state, Dart parsing/service, both sides' tests, and this file together. Preserve server-side host checks, poll ID validation, first-vote semantics, and personalized selection. Never replace failing checks with placeholders to make CI green.
 
@@ -165,3 +179,11 @@ Added editable Activities, Food, and Time presets plus Custom (clears the draft)
 Work is on `codex/poll-templates`, created from the current local main. No remote freshness check, commit, push, or merge was performed. Existing local iOS scaffold, metadata, analysis options, and lockfile changes were preserved. This supersedes the earlier no-iOS-scaffold note for this working checkout; the scaffold is user work and has not been validated here.
 
 Validation: Flutter analysis passed; all 13 native Flutter tests passed, including editing a template, switching to a shorter template, and clearing with Custom. This supersedes the earlier native runner limitation for this machine. Simulator visual review of these new changes remains pending. Next: hot restart the app, open Start another poll, and demo template editing and closed-poll results before committing.
+
+### Two-stage wheel implementation (2026-09-28)
+
+Implemented room-owned categories and activity lists with stable server-generated IDs, host-only CRUD routes, category/activity spin routes, and wheel state in every `STATE_UPDATE` snapshot. The server chooses the result and spin ID. Category re-spins clear the old activity selection; activity spins retain the selected category. Empty spin lists and missing/stale selections return 409; missing category/activity IDs return 404. Name validation trims values and rejects blanks or case-insensitive duplicates.
+
+Flutter now parses wheel snapshots, exposes authenticated wheel/category APIs, and renders a dedicated category/activity wheel panel with host-only editing/spinning, guest observation, reconnect restoration, and an animation that lands on the server-selected segment. Poll coordination and APIs remain in place.
+
+Validation in this checkout: `python -m py_compile server/main.py server/test_main.py` passed; `python -m pytest server/ -q` passed (**18 passed**, one Starlette/httpx deprecation warning); `flutter analyze` passed (**no issues**); the widget test suite passed (**16 passed**) in a temporary clean copy to avoid stale build-cache references. Android device/integration tests and APK build were not run because the sandbox could not access the configured Android SDK's `adb.exe`. The Flutter animation has not had a device visual review. No commit or push was made. The active working branch is `codex/wheel-feature`.
