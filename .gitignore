@@ -2,3 +2,8 @@
 __pycache__/
 .pytest_cache/
 *.py[cod]
+
+# Local room database and SQLite sidecars
+server/data/
+*.sqlite3
+*.sqlite3-*

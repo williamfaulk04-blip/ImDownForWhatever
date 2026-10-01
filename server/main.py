@@ -1,9 +1,14 @@
-"""Single-process room/poll prototype. Session tokens are private bearer credentials."""
+"""Single-process room/poll server with durable SQLite room snapshots."""
 from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager, suppress
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+import hashlib
+import logging
+import os
+from pathlib import Path
+import sqlite3
 import math
 import secrets
 import string
@@ -12,6 +17,8 @@ from typing import Annotated, Literal, Optional
 
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field, StringConstraints
+
+from server.storage import RoomStore
 
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=40)]
 Option = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
@@ -80,7 +87,7 @@ class WheelState:
 class Room:
     code: str
     host_id: str
-    members: dict[str, Member]  # private token -> public participant
+    members: dict[str, Member]  # SHA-256 token digest -> public participant
     is_open: bool = True
     poll: Optional[Poll] = None
     categories: list[WheelCategory] = field(default_factory=list)
@@ -91,10 +98,54 @@ class Room:
 
 rooms: dict[str, Room] = {}
 
+store: Optional[RoomStore] = None
+
+
+def _token_key(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _encode_room(room: Room) -> dict:
+    return {
+        'code': room.code, 'host_id': room.host_id, 'is_open': room.is_open,
+        'members': {key: asdict(member) for key, member in room.members.items()},
+        'poll': asdict(room.poll) if room.poll else None,
+        'categories': [asdict(category) for category in room.categories],
+        'wheel': asdict(room.wheel),
+    }
+
+
+def _decode_room(data: dict) -> Room:
+    return Room(
+        code=data['code'], host_id=data['host_id'], is_open=data['is_open'],
+        members={key: Member(**member) for key, member in data['members'].items()},
+        poll=Poll(**data['poll']) if data['poll'] else None,
+        categories=[WheelCategory(category['id'], category['name'],
+                    [WheelActivity(**activity) for activity in category['activities']])
+                    for category in data['categories']],
+        wheel=WheelState(**data['wheel']),
+    )
+
+
+def _persist(room: Room) -> None:
+    if store is None:
+        raise RuntimeError('Room storage has not been initialized')
+    try:
+        store.save(room.code, _encode_room(room))
+    except sqlite3.Error as error:
+        # Keep clients and memory on the last committed version after a disk error.
+        previous = store.previous(room.code)
+        if previous is not None:
+            restored = _decode_room(previous)
+            for name in ('host_id', 'members', 'is_open', 'poll', 'categories', 'wheel'):
+                setattr(room, name, getattr(restored, name))
+        raise HTTPException(503, 'Could not save changes. Please try again.') from error
+
 
 def _expire(room: Room) -> bool:
     if room.poll and not room.poll.closed and time.time() >= room.poll.ends_at:
         room.poll.closed = True
+        _persist(room)
         return True
     return False
 
@@ -163,6 +214,7 @@ def _reset_wheel(room: Room) -> None:
 
 
 async def _broadcast(room: Room) -> None:
+    _persist(room)
     # Serialize snapshots so an older broadcast cannot overtake a newer one.
     async with room.broadcast_lock:
         for socket, token in list(room.connections.items()):
@@ -177,12 +229,22 @@ async def _ticker() -> None:
         await asyncio.sleep(1)
         for room in list(rooms.values()):
             if room.poll and room.connections:
-                _expire(room)
-                await _broadcast(room)
+                try:
+                    _expire(room)
+                    await _broadcast(room)
+                except HTTPException:
+                    logging.getLogger(__name__).warning('Room save failed; will retry on the next tick')
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global store
+    store = RoomStore(os.environ.get('FASTPOLL_DB_PATH', str(Path(__file__).resolve().parent / 'data' / 'rooms.sqlite3')))
+    rooms.clear()
+    for data in store.load():
+        room = _decode_room(data)
+        rooms[room.code] = room
+        _expire(room)
     ticker = asyncio.create_task(_ticker())
     try:
         yield
@@ -190,6 +252,8 @@ async def lifespan(app: FastAPI):
         ticker.cancel()
         with suppress(asyncio.CancelledError):
             await ticker
+        store.close()
+        store = None
 
 
 app = FastAPI(title="ImDownForWhatever", version="0.2.0", lifespan=lifespan)
@@ -198,12 +262,13 @@ app = FastAPI(title="ImDownForWhatever", version="0.2.0", lifespan=lifespan)
 def _room(code: str) -> Room:
     room = rooms.get(code.upper())
     if room is None:
-        raise HTTPException(404, "Room not found. It may have ended or the server restarted.")
+        raise HTTPException(404, "Room not found. Check the room code.")
     return room
 
 
 def _member(room: Room, authorization: Optional[str], host: bool = False) -> str:
     token = authorization.removeprefix("Bearer ") if authorization else ""
+    token = _token_key(token)
     if not authorization or not authorization.startswith("Bearer ") or token not in room.members:
         raise HTTPException(401, "Your room session is no longer valid. Join again.")
     if host and room.members[token].id != room.host_id:
@@ -212,7 +277,7 @@ def _member(room: Room, authorization: Optional[str], host: bool = False) -> str
 
 
 def _session(room: Room, token: str) -> dict:
-    return {"room_code": room.code, "session_token": token, "name": room.members[token].name}
+    return {"room_code": room.code, "session_token": token, "name": room.members[_token_key(token)].name}
 
 
 @app.get("/health")
@@ -226,7 +291,8 @@ async def create_room(payload: JoinRequest):
     while code in rooms:
         code = "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(4))
     token, member_id = secrets.token_urlsafe(32), secrets.token_hex(12)
-    room = Room(code=code, host_id=member_id, members={token: Member(member_id, payload.name)})
+    room = Room(code=code, host_id=member_id, members={_token_key(token): Member(member_id, payload.name)})
+    _persist(room)
     rooms[code] = room
     return _session(room, token)
 
@@ -235,14 +301,14 @@ async def create_room(payload: JoinRequest):
 async def join_room(code: str, payload: JoinRequest):
     room = _room(code)
     if payload.session_token:
-        if payload.session_token not in room.members:
+        if _token_key(payload.session_token) not in room.members:
             raise HTTPException(401, "Saved session expired. Join again to start a new session.")
         # Existing members can reconnect even when new joins are locked.
         return _session(room, payload.session_token)
     if not room.is_open:
         raise HTTPException(403, "The host has locked this room to new friends.")
     token = secrets.token_urlsafe(32)
-    room.members[token] = Member(secrets.token_hex(12), payload.name)
+    room.members[_token_key(token)] = Member(secrets.token_hex(12), payload.name)
     await _broadcast(room)
     return _session(room, token)
 
@@ -415,7 +481,8 @@ async def room_socket(socket: WebSocket, code: str):
         # Credentials stay out of URLs/access logs. Authenticate in the first frame.
         auth = await asyncio.wait_for(socket.receive_json(), timeout=10)
         token = auth.get("session_token") if isinstance(auth, dict) else None
-        if not isinstance(token, str) or token not in room.members:
+        token = _token_key(token) if isinstance(token, str) else None
+        if token not in room.members:
             await socket.close(code=4401, reason="Invalid room session")
             return
         room.connections[socket] = token
@@ -445,7 +512,10 @@ async def room_socket(socket: WebSocket, code: str):
             if error:
                 await socket.send_json({"event": "ERROR", "message": error})
             else:
-                await _broadcast(room)
+                try:
+                    await _broadcast(room)
+                except HTTPException as failure:
+                    await socket.send_json({'event': 'ERROR', 'message': failure.detail})
     except WebSocketDisconnect:
         pass
     except (asyncio.TimeoutError, ValueError):

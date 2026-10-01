@@ -15,11 +15,15 @@ class _WheelGraphic extends StatefulWidget {
     required this.items,
     required this.selectedId,
     required this.spinId,
+    required this.onSpinComplete,
+    required this.animateOnMount,
   });
 
   final List<({String id, String name})> items;
   final String? selectedId;
   final String? spinId;
+  final VoidCallback onSpinComplete;
+  final bool animateOnMount;
 
   @override
   State<_WheelGraphic> createState() => _WheelGraphicState();
@@ -41,30 +45,41 @@ class _WheelGraphicState extends State<_WheelGraphic>
         )..addListener(() {
           setState(() => _rotation = _turn.value);
         });
+    _controller.addStatusListener((status) {
+      if (status == AnimationStatus.completed) widget.onSpinComplete();
+    });
+    _rotation = _selectedRotation();
     _turn = AlwaysStoppedAnimation(_rotation);
+    if (widget.animateOnMount) _startSpin();
+  }
+
+  double _selectedRotation() {
+    final index = widget.items.indexWhere(
+      (item) => item.id == widget.selectedId,
+    );
+    if (index < 0 || widget.items.isEmpty) return 0;
+    final slice = 2 * math.pi / widget.items.length;
+    return (2 * math.pi - (index + 0.5) * slice) % (2 * math.pi);
   }
 
   @override
   void didUpdateWidget(covariant _WheelGraphic oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.spinId == null || widget.spinId == oldWidget.spinId) return;
-    final index = widget.items.indexWhere(
-      (item) => item.id == widget.selectedId,
-    );
-    if (index < 0 || widget.items.isEmpty) return;
-    final slice = 2 * math.pi / widget.items.length;
-    final target = (2 * math.pi - (index + 0.5) * slice) % (2 * math.pi);
-    final end = _rotation + 4 * 2 * math.pi + target;
-    _controller
-      ..stop()
-      ..reset();
+    if (!widget.items.any((item) => item.id == widget.selectedId)) return;
+    _startSpin();
+  }
+
+  void _startSpin() {
+    final target = _selectedRotation();
+    final begin = _rotation;
+    final remaining = (target - begin) % (2 * math.pi);
+    _controller.stop();
     _turn = Tween<double>(
-      begin: _rotation,
-      end: end,
+      begin: begin,
+      end: begin + 4 * 2 * math.pi + remaining,
     ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic));
-    _controller.forward().whenComplete(() {
-      if (mounted) setState(() => _rotation = target);
-    });
+    _controller.forward(from: 0);
   }
 
   @override
@@ -77,7 +92,7 @@ class _WheelGraphicState extends State<_WheelGraphic>
   Widget build(BuildContext context) => CustomPaint(
     painter: _WheelPainter(
       items: widget.items,
-      selectedId: widget.selectedId,
+      selectedId: _controller.isAnimating ? null : widget.selectedId,
       rotation: _rotation,
       accent: Theme.of(context).colorScheme.primary,
       centerColor: Theme.of(context).colorScheme.surface,
@@ -175,12 +190,36 @@ class _WheelPainter extends CustomPainter {
     }
     canvas.restore();
 
-    canvas.drawCircle(center, radius * 0.12, Paint()..color = centerColor);
+    canvas.drawCircle(
+      center,
+      radius,
+      Paint()
+        ..color = accent
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3,
+    );
+    canvas.drawShadow(
+      Path()..addOval(Rect.fromCircle(center: center, radius: radius * 0.13)),
+      Colors.black26,
+      3,
+      true,
+    );
+    canvas.drawCircle(center, radius * 0.13, Paint()..color = centerColor);
+    canvas.drawCircle(center, radius * 0.055, Paint()..color = accent);
     final pointer = Path()
-      ..moveTo(center.dx, center.dy - radius - 9)
-      ..lineTo(center.dx - 10, center.dy - radius + 8)
-      ..lineTo(center.dx + 10, center.dy - radius + 8)
+      ..moveTo(center.dx - 12, center.dy - radius - 7)
+      ..lineTo(center.dx + 12, center.dy - radius - 7)
+      ..lineTo(center.dx, center.dy - radius + 19)
       ..close();
+    canvas.drawShadow(pointer, Colors.black45, 3, true);
+    canvas.drawPath(
+      pointer,
+      Paint()
+        ..color = centerColor
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3
+        ..strokeJoin = StrokeJoin.round,
+    );
     canvas.drawPath(pointer, Paint()..color = accent);
   }
 
@@ -194,7 +233,7 @@ class _WheelPainter extends CustomPainter {
       oldDelegate.colors != colors;
 }
 
-class WheelPanel extends StatelessWidget {
+class WheelPanel extends StatefulWidget {
   const WheelPanel({
     required this.session,
     required this.room,
@@ -209,6 +248,27 @@ class WheelPanel extends StatelessWidget {
   final bool enabled;
   final bool busy;
   final WheelAction onAction;
+
+  @override
+  State<WheelPanel> createState() => _WheelPanelState();
+}
+
+class _WheelPanelState extends State<WheelPanel> {
+  bool _spinning = false;
+
+  RoomSession get session => widget.session;
+  RoomState get room => widget.room;
+  bool get enabled => widget.enabled && !_spinning;
+  bool get busy => widget.busy;
+  WheelAction get onAction => widget.onAction;
+
+  @override
+  void didUpdateWidget(covariant WheelPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (room.wheel.spinId != oldWidget.room.wheel.spinId) {
+      _spinning = room.wheel.spinId != null;
+    }
+  }
 
   Future<String?> _askName(
     BuildContext context, {
@@ -436,6 +496,10 @@ class WheelPanel extends StatelessWidget {
                 items: wheelItems,
                 selectedId: selectedWheelId,
                 spinId: wheel.spinId,
+                animateOnMount: _spinning,
+                onSpinComplete: () {
+                  if (mounted) setState(() => _spinning = false);
+                },
               ),
             ),
           ),
@@ -454,7 +518,12 @@ class WheelPanel extends StatelessWidget {
               ],
             ),
           ),
-        if (wheel.phase != null && wheel.result != null) ...[
+        if (_spinning)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 16),
+            child: Text('Spinning…', textAlign: TextAlign.center),
+          ),
+        if (!_spinning && wheel.phase != null && wheel.result != null) ...[
           const SizedBox(height: 16),
           AnimatedSwitcher(
             duration: const Duration(milliseconds: 350),
@@ -512,7 +581,7 @@ class WheelPanel extends StatelessWidget {
             icon: const Icon(Icons.casino_outlined),
             label: const Text('Spin activity wheel'),
           ),
-          if (wheel.selectedCategoryId != null && !activityReady)
+          if (!_spinning && wheel.selectedCategoryId != null && !activityReady)
             const Padding(
               padding: EdgeInsets.only(top: 8),
               child: Text('Add an activity to the selected category to spin.'),
