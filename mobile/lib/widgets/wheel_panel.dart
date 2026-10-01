@@ -96,6 +96,7 @@ class _WheelGraphicState extends State<_WheelGraphic>
       rotation: _rotation,
       accent: Theme.of(context).colorScheme.primary,
       centerColor: Theme.of(context).colorScheme.surface,
+      labelColor: Theme.of(context).colorScheme.onPrimaryContainer,
       colors: [
         Theme.of(context).colorScheme.primaryContainer,
         Theme.of(context).colorScheme.secondaryContainer,
@@ -114,6 +115,7 @@ class _WheelPainter extends CustomPainter {
     required this.rotation,
     required this.accent,
     required this.centerColor,
+    required this.labelColor,
     required this.colors,
   });
 
@@ -122,6 +124,7 @@ class _WheelPainter extends CustomPainter {
   final double rotation;
   final Color accent;
   final Color centerColor;
+  final Color labelColor;
   final List<Color> colors;
 
   @override
@@ -168,8 +171,8 @@ class _WheelPainter extends CustomPainter {
       final label = TextPainter(
         text: TextSpan(
           text: items[i].name,
-          style: const TextStyle(
-            color: Colors.black87,
+          style: TextStyle(
+            color: labelColor,
             fontSize: 11,
             fontWeight: FontWeight.w600,
           ),
@@ -230,6 +233,7 @@ class _WheelPainter extends CustomPainter {
       oldDelegate.rotation != rotation ||
       oldDelegate.accent != accent ||
       oldDelegate.centerColor != centerColor ||
+      oldDelegate.labelColor != labelColor ||
       oldDelegate.colors != colors;
 }
 
@@ -240,6 +244,7 @@ class WheelPanel extends StatefulWidget {
     required this.enabled,
     required this.busy,
     required this.onAction,
+    this.onManage,
     super.key,
   });
 
@@ -248,6 +253,7 @@ class WheelPanel extends StatefulWidget {
   final bool enabled;
   final bool busy;
   final WheelAction onAction;
+  final VoidCallback? onManage;
 
   @override
   State<WheelPanel> createState() => _WheelPanelState();
@@ -270,196 +276,14 @@ class _WheelPanelState extends State<WheelPanel> {
     }
   }
 
-  Future<String?> _askName(
-    BuildContext context, {
-    required String title,
-    String initial = '',
-  }) async {
-    final result = await showDialog<String>(
-      context: context,
-      builder: (_) => _WheelNameDialog(title: title, initial: initial),
-    );
-    if (result == null || result.trim().isEmpty) return null;
-    return result.trim();
-  }
-
-  Future<void> _addCategory(BuildContext context) async {
-    final name = await _askName(context, title: 'Add category');
-    if (name != null && context.mounted) {
-      await onAction((api) => api.addCategory(session, name));
-    }
-  }
-
-  Future<void> _renameCategory(
-    BuildContext context,
-    WheelCategory category,
-  ) async {
-    final name = await _askName(
-      context,
-      title: 'Rename category',
-      initial: category.name,
-    );
-    if (name != null && context.mounted) {
-      await onAction((api) => api.renameCategory(session, category.id, name));
-    }
-  }
-
-  Future<void> _addActivity(
-    BuildContext context,
-    WheelCategory category,
-  ) async {
-    final name = await _askName(context, title: 'Add activity');
-    if (name != null && context.mounted) {
-      await onAction((api) => api.addActivity(session, category.id, name));
-    }
-  }
-
-  Future<void> _renameActivity(
-    BuildContext context,
-    WheelCategory category,
-    WheelActivity activity,
-  ) async {
-    final name = await _askName(
-      context,
-      title: 'Rename activity',
-      initial: activity.name,
-    );
-    if (name != null && context.mounted) {
-      await onAction(
-        (api) => api.renameActivity(session, category.id, activity.id, name),
-      );
-    }
-  }
-
-  Future<bool> _confirmRemove(BuildContext context, String name) async =>
-      await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text('Remove $name?'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Remove'),
-            ),
-          ],
-        ),
-      ) ??
-      false;
-
-  Widget _categoryTile(BuildContext context, WheelCategory category) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    category.name,
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                ),
-                if (room.isHost) ...[
-                  IconButton(
-                    tooltip: 'Rename ${category.name}',
-                    onPressed: enabled
-                        ? () => _renameCategory(context, category)
-                        : null,
-                    icon: const Icon(Icons.edit_outlined),
-                  ),
-                  IconButton(
-                    tooltip: 'Remove ${category.name}',
-                    onPressed: enabled
-                        ? () async {
-                            if (await _confirmRemove(context, category.name) &&
-                                context.mounted) {
-                              await onAction(
-                                (api) =>
-                                    api.removeCategory(session, category.id),
-                              );
-                            }
-                          }
-                        : null,
-                    icon: const Icon(Icons.delete_outline),
-                  ),
-                ],
-              ],
-            ),
-            if (category.activities.isEmpty)
-              const Text('No activities yet.')
-            else
-              ...category.activities.map(
-                (activity) => ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(activity.name),
-                  trailing: room.isHost
-                      ? Wrap(
-                          spacing: 0,
-                          children: [
-                            IconButton(
-                              tooltip: 'Rename ${activity.name}',
-                              onPressed: enabled
-                                  ? () => _renameActivity(
-                                      context,
-                                      category,
-                                      activity,
-                                    )
-                                  : null,
-                              icon: const Icon(Icons.edit_outlined, size: 20),
-                            ),
-                            IconButton(
-                              tooltip: 'Remove ${activity.name}',
-                              onPressed: enabled
-                                  ? () async {
-                                      if (await _confirmRemove(
-                                            context,
-                                            activity.name,
-                                          ) &&
-                                          context.mounted) {
-                                        await onAction(
-                                          (api) => api.removeActivity(
-                                            session,
-                                            category.id,
-                                            activity.id,
-                                          ),
-                                        );
-                                      }
-                                    }
-                                  : null,
-                              icon: const Icon(Icons.delete_outline, size: 20),
-                            ),
-                          ],
-                        )
-                      : null,
-                ),
-              ),
-            if (room.isHost)
-              Align(
-                alignment: Alignment.centerLeft,
-                child: TextButton.icon(
-                  onPressed: enabled
-                      ? () => _addActivity(context, category)
-                      : null,
-                  icon: const Icon(Icons.add),
-                  label: const Text('Add activity'),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final wheel = room.wheel;
+    final categoryCount = room.categories.length;
+    final activityCount = room.categories.fold<int>(
+      0,
+      (sum, category) => sum + category.activities.length,
+    );
     WheelCategory? selectedCategory;
     for (final category in room.categories) {
       if (category.id == wheel.selectedCategoryId) {
@@ -558,12 +382,16 @@ class _WheelPanelState extends State<WheelPanel> {
             padding: EdgeInsets.symmetric(vertical: 12),
             child: Text('No categories yet.'),
           ),
-        ...room.categories.map((category) => _categoryTile(context, category)),
+        Text(
+          '$categoryCount ${categoryCount == 1 ? 'category' : 'categories'} · $activityCount ${activityCount == 1 ? 'activity' : 'activities'}',
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 16),
         if (room.isHost) ...[
           OutlinedButton.icon(
-            onPressed: enabled ? () => _addCategory(context) : null,
-            icon: const Icon(Icons.add),
-            label: const Text('Add category'),
+            onPressed: enabled ? widget.onManage : null,
+            icon: const Icon(Icons.tune_rounded),
+            label: const Text('Manage choices'),
           ),
           const SizedBox(height: 8),
           FilledButton.icon(
@@ -594,52 +422,4 @@ class _WheelPanelState extends State<WheelPanel> {
       ],
     );
   }
-}
-
-class _WheelNameDialog extends StatefulWidget {
-  const _WheelNameDialog({required this.title, required this.initial});
-
-  final String title;
-  final String initial;
-
-  @override
-  State<_WheelNameDialog> createState() => _WheelNameDialogState();
-}
-
-class _WheelNameDialogState extends State<_WheelNameDialog> {
-  late final TextEditingController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = TextEditingController(text: widget.initial);
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => AlertDialog(
-    title: Text(widget.title),
-    content: TextField(
-      controller: _controller,
-      autofocus: true,
-      maxLength: 100,
-      decoration: const InputDecoration(labelText: 'Name'),
-      onSubmitted: (value) => Navigator.pop(context, value.trim()),
-    ),
-    actions: [
-      TextButton(
-        onPressed: () => Navigator.pop(context),
-        child: const Text('Cancel'),
-      ),
-      FilledButton(
-        onPressed: () => Navigator.pop(context, _controller.text.trim()),
-        child: const Text('Save'),
-      ),
-    ],
-  );
 }

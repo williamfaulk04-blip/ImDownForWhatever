@@ -1,3 +1,5 @@
+import '../theme/app_theme.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -85,7 +87,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('ImDownForWhatever')),
+    appBar: AppBar(
+      title: const Text('ImDownForWhatever'),
+      actions: const [AppearanceButton()],
+    ),
     body: _busy
         ? RoomLoadingView(status: _loadingStatus)
         : Center(
@@ -95,6 +100,22 @@ class _HomeScreenState extends State<HomeScreen> {
                 shrinkWrap: true,
                 padding: const EdgeInsets.all(24),
                 children: [
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.primaryContainer,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Icon(
+                        Icons.explore_rounded,
+                        size: 36,
+                        color: Theme.of(context).colorScheme.onPrimaryContainer,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
                   Text(
                     'Good friends.\nOne plan.',
                     style: Theme.of(context).textTheme.headlineLarge,
@@ -109,10 +130,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     maxLength: 40,
                     enabled: !_busy,
                     textCapitalization: TextCapitalization.words,
-                    decoration: const InputDecoration(
-                      labelText: 'Your name',
-                      border: OutlineInputBorder(),
-                    ),
+                    decoration: const InputDecoration(labelText: 'Your name'),
                   ),
                   const SizedBox(height: 12),
                   FilledButton.icon(
@@ -132,7 +150,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     decoration: const InputDecoration(
                       labelText: 'Room code',
                       hintText: 'AB12',
-                      border: OutlineInputBorder(),
                     ),
                     onSubmitted: (_) => _enter(true),
                   ),

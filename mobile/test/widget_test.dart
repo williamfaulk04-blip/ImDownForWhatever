@@ -1,3 +1,5 @@
+import 'package:fastpoll/screens/choices_screen.dart';
+
 import 'dart:async';
 import 'dart:convert';
 
@@ -517,7 +519,8 @@ void main() {
     expect(find.byType(WheelPanel), findsOneWidget);
     expect(find.text('Spin category wheel'), findsOneWidget);
     expect(find.text('Spin activity wheel'), findsOneWidget);
-    expect(find.text('Add category'), findsOneWidget);
+    expect(find.text('Manage choices'), findsOneWidget);
+    expect(find.text('Add category'), findsNothing);
     await tester.pumpWidget(const SizedBox());
   });
 
@@ -578,34 +581,158 @@ void main() {
     }
   });
 
-  testWidgets('saving wheel category dialog during exit transition is safe', (
+  testWidgets(
+    'choices editor opens full pages, receives updates and blocks disconnected saves',
+    (tester) async {
+      final snapshot = state(host: true);
+      final updates = ValueNotifier<ChoicesState>((
+        room: RoomState.fromJson(snapshot),
+        connected: true,
+      ));
+      var requests = 0;
+      final api = ApiService(
+        client: MockClient((request) async {
+          requests++;
+          expect(jsonDecode(request.body)['name'], 'Games');
+          snapshot['categories'] = [
+            {'id': 'games', 'name': 'Games', 'activities': []},
+          ];
+          updates.value = (room: RoomState.fromJson(snapshot), connected: true);
+          return http.Response('{}', 200);
+        }),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ChoicesScreen(session: session, state: updates, api: api),
+        ),
+      );
+      await tester.tap(find.text('Add category'));
+      await tester.pumpAndSettle();
+      expect(find.byType(ChoiceFormScreen), findsOneWidget);
+      expect(find.byType(AlertDialog), findsNothing);
+      await tester.ensureVisible(find.text('Save'));
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(find.text('Enter a name to continue.'), findsOneWidget);
+      await tester.enterText(find.byType(TextFormField), 'Games');
+      updates.value = (room: updates.value.room, connected: false);
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(requests, 0);
+      expect(find.text('Reconnect to the room before saving.'), findsOneWidget);
+      expect(
+        tester
+            .widget<TextFormField>(find.byType(TextFormField))
+            .controller!
+            .text,
+        'Games',
+      );
+      updates.value = (room: updates.value.room, connected: true);
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(requests, 1);
+      expect(find.byType(ChoiceFormScreen), findsNothing);
+      expect(find.text('Games'), findsOneWidget);
+      await tester.tap(find.text('Add activity'));
+      await tester.pumpAndSettle();
+      expect(find.byType(ChoiceFormScreen), findsOneWidget);
+      expect(find.textContaining('An idea for Games'), findsOneWidget);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(requests, 1);
+      await tester.pumpWidget(const SizedBox());
+      updates.dispose();
+      api.close();
+    },
+  );
+
+  testWidgets('failed form save preserves input and allows retry', (
     tester,
   ) async {
+    var attempts = 0;
     await tester.pumpWidget(
       MaterialApp(
-        home: Scaffold(
-          body: WheelPanel(
-            session: session,
-            room: RoomState.fromJson(state(host: true)),
-            enabled: true,
-            busy: false,
-            onAction: (_) async {},
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              child: const Text('Open form'),
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute<void>(
+                  builder: (_) => ChoiceFormScreen(
+                    title: 'Add category',
+                    subtitle: 'Group your ideas',
+                    initial: '',
+                    onSave: (name) async {
+                      attempts++;
+                      if (attempts == 1) {
+                        throw ApiFailure('Please try again.', 503);
+                      }
+                    },
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
       ),
     );
-
-    await tester.tap(find.text('Add category'));
+    await tester.tap(find.text('Open form'));
     await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextField), 'Games');
+    await tester.enterText(find.byType(TextFormField), 'Food');
+    await tester.ensureVisible(find.text('Save'));
     await tester.tap(find.text('Save'));
-    await tester.pump();
-
-    // Remove the route while its reverse transition is still running. The
-    // dialog state must retain ownership of the TextField controller until
-    // the dialog is actually disposed.
-    await tester.pumpWidget(const SizedBox());
     await tester.pumpAndSettle();
-    expect(tester.takeException(), isNull);
+    expect(find.text('Please try again.'), findsOneWidget);
+    expect(
+      tester.widget<TextFormField>(find.byType(TextFormField)).controller!.text,
+      'Food',
+    );
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(find.text('Open form'), findsOneWidget);
+    expect(attempts, 2);
+  });
+
+  testWidgets('dark appearance persists after app restart', (tester) async {
+    await tester.pumpWidget(const FastPollApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Appearance'));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is CheckedPopupMenuItem<ThemeMode> &&
+            widget.value == ThemeMode.dark,
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<MaterialApp>(find.byType(MaterialApp)).themeMode,
+      ThemeMode.dark,
+    );
+    final preferences = await SharedPreferences.getInstance();
+    expect(preferences.getString('appearance'), 'dark');
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpWidget(const FastPollApp());
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<MaterialApp>(find.byType(MaterialApp)).themeMode,
+      ThemeMode.dark,
+    );
+    await tester.tap(find.byTooltip('Appearance'));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is CheckedPopupMenuItem<ThemeMode> &&
+            widget.value == ThemeMode.system,
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<MaterialApp>(find.byType(MaterialApp)).themeMode,
+      ThemeMode.system,
+    );
   });
 }

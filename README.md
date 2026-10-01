@@ -84,3 +84,9 @@ The **CI** workflow checks the server, Flutter analysis/tests, and Android build
 ## Development
 
 Read [HANDOVER.md](HANDOVER.md) for the current implementation contract, limitations, validation results, and prioritized next tasks. For new development, update `main` and create a new feature branch for your task. Preserve any existing uncommitted work before switching branches. The owner wants to demo changes **before any commits**; do not commit, push, or merge until that review is complete and authorized.
+
+### Choices and appearance
+
+Hosts open **Manage choices** from the lobby to manage categories and activities on a separate page. Add and rename actions open full-page forms; failed saves preserve the entered name for retry. The lobby keeps the wheel, result, and spin controls without the editor list.
+
+Use the **Appearance** icon in the home, room, or choices app bar to select **Light mode**, **Dark mode**, or **Use device theme**. The selection is saved on that installation.
