@@ -102,7 +102,7 @@ Snapshot shape:
 
 ## Run, check, and demo
 
-See README for normal setup commands. Use one Uvicorn worker, no reload during a demo: process restarts destroy rooms.
+See README for normal setup commands. Use one Uvicorn worker. SQLite restores saved rooms on restart; socket connections reconnect.
 
 Use the environment available in your checkout:
 - Reference toolchain: Flutter 3.47.2 / Dart 3.13.2; CI uses Python 3.11. Check installed versions with `flutter --version` and `python --version`.
@@ -128,7 +128,7 @@ Demo checklist before committing:
 
 ## Important limitations — do not mark these done
 
-- In-memory single-process storage. No database, room recovery, room deletion/TTL, multi-worker pub/sub, or historical poll collection. Only the latest poll is retained; old rooms/members currently accumulate until restart.
+- SQLite room recovery is implemented (see 2026-10-01 persistence update). Still single-process with no room deletion/TTL, multi-worker pub/sub, or historical poll collection. Only the latest poll/spin is retained; old rooms/members accumulate in the database.
 - Private bearer sessions are not accounts. Clearing app data or joining from another installation can create another voter; this is not abuse-proof identity. Tokens in `shared_preferences` are not encrypted secure storage. Use platform secure storage and HTTPS/WSS before a public launch.
 - No host transfer, kick/ban, permanent room close, or explicit membership deletion. Back means disconnect/away, not leave permanently.
 - Wheel results are immediate server decisions. The client animates the relevant category/activity wheel toward the authoritative selected segment; the server does not wait for animation completion.
@@ -187,3 +187,20 @@ Implemented room-owned categories and activity lists with stable server-generate
 Flutter now parses wheel snapshots, exposes authenticated wheel/category APIs, and renders a dedicated category/activity wheel panel with host-only editing/spinning, guest observation, reconnect restoration, and an animation that lands on the server-selected segment. Poll coordination and APIs remain in place.
 
 Validation in this checkout: `python -m py_compile server/main.py server/test_main.py` passed; `python -m pytest server/ -q` passed (**18 passed**, one Starlette/httpx deprecation warning); `flutter analyze` passed (**no issues**); the widget test suite passed (**16 passed**) in a temporary clean copy to avoid stale build-cache references. Android device/integration tests and APK build were not run because the sandbox could not access the configured Android SDK's `adb.exe`. The Flutter animation has not had a device visual review. No commit or push was made. The active working branch is `codex/wheel-feature`.
+
+### Wheel pointer polish (2026-10-01)
+
+On `codex/wheel-pointer`, changed the fixed pointer to face inward and overlap the rim, with a contrasting outline and shadow. Added a continuous rim and outlined hub detail. Corrected repeated-spin rotation to travel from the current angle to the authoritative target without a completion jump; restored results now initialize at the selected angle. No server/API changes. Flutter analysis passed and all 17 existing Flutter tests passed; diff whitespace check passed. Simulator visual demo remains pending: hot restart and check initial/restored results plus repeated category/activity spins. No commit or push performed.
+
+### Delayed wheel reveal (2026-10-01)
+
+Category and activity result cards now stay hidden until the local animation reports completion. The selected-slice outline is also hidden during animation. The panel shows Spinning… and disables wheel editing/spin actions while spinning. Repeated snapshots do not reset reveal timing; already completed results show immediately on initial mount. Added a regression test covering both phases and an intervening repeated snapshot. Flutter analysis passed; all 18 tests passed. Simulator visual demo remains pending. Changes remain uncommitted on codex/wheel-pointer alongside the pointer improvements.
+
+
+### Durable rooms and choices (2026-10-01)
+
+Added server/storage.py using transactional SQLite snapshots. The server restores rooms at startup and saves changes before successful mutation responses or broadcasts; unchanged heartbeats do not rewrite the database. Persisted: members (token digests only), host, join lock, current poll/options/votes/deadline/closed state, categories/activities, and latest wheel selection. Connections and locks are recreated, never persisted. Expired polls close after downtime. Storage failures return 503 for REST mutations and roll back in-memory room data to its committed snapshot; failed vote saves report an error instead of confirmation. Ticker save failures retry on subsequent ticks.
+
+Default database: server/data/rooms.sqlite3, ignored by Git, owner-only permissions. FASTPOLL_DB_PATH overrides its location. Continue running one worker; no distributed broadcasts, TTL, full history, or account-based host recovery. Existing rooms in a running pre-persistence server cannot be recovered after it stops. The first restart enables persistence for newly created rooms. No running server was stopped in this change.
+
+Verification: all 21 server tests passed using a temporary Python environment. New tests exercise lifecycle restart recovery, host/member authentication in a locked room, saved votes/wheel choices, online status reset, explicit poll closure, offline deadline expiration, token privacy, and failed-save rollback. Existing Flutter edits from the wheel reveal task are preserved. No commit/push performed. Next demo: restart the backend once, create a room and choices, then restart again and rejoin the same code on the same app installation.

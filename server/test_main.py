@@ -9,7 +9,8 @@ import server.main as main
 
 
 @pytest.fixture
-def client():
+def client(tmp_path, monkeypatch):
+    monkeypatch.setenv('FASTPOLL_DB_PATH', str(tmp_path / 'rooms.sqlite3'))
     rooms.clear()
     with TestClient(app) as client:
         yield client
@@ -360,3 +361,83 @@ def test_activity_spin_rejects_guest_and_empty_selected_category(client):
     assert cleared['phase'] is None
     assert cleared['selected_category_id'] is None
     assert cleared['selected_activity_id'] is None
+
+
+def test_restart_restores_room_choices_votes_and_host(tmp_path, monkeypatch):
+    database = tmp_path / 'rooms.sqlite3'
+    monkeypatch.setenv('FASTPOLL_DB_PATH', str(database))
+    with TestClient(app) as client:
+        host = make_room(client)
+        friend = join(client, host)
+        path = f'/api/rooms/{host["room_code"]}'
+        category = client.post(path + '/categories', headers=headers(host),
+                               json={'name': 'Games'}).json()['categories'][0]
+        assert client.post(path + f'/categories/{category["id"]}/activities',
+                           headers=headers(host), json={'name': 'Mario Kart'}).status_code == 201
+        client.post(path + '/wheel/category-spin', headers=headers(host))
+        spin = client.post(path + '/wheel/activity-spin', headers=headers(host)).json()['wheel']
+        poll = start(client, host, duration=3600)
+        with client.websocket_connect(f'/ws/{host["room_code"]}') as socket:
+            authenticate(socket, friend)
+            vote(socket, poll, 1)
+            until(socket, lambda event: event.get('poll', {}).get('selected_option') == 1)
+        client.patch(path, headers=headers(host), json={'is_open': False})
+        # Data is committed before shutdown; raw bearer credentials are never stored.
+        import sqlite3
+        with sqlite3.connect(database) as db:
+            saved = db.execute('SELECT payload FROM rooms').fetchone()[0]
+        assert 'Mario Kart' in saved
+        assert host['session_token'] not in saved
+        assert friend['session_token'] not in saved
+    rooms.clear()
+    with TestClient(app) as restarted:
+        assert restarted.post(path + '/join', json={'name': 'New'}).status_code == 403
+        for session in (host, friend):
+            assert restarted.post(path + '/join', json={
+                'name': session['name'], 'session_token': session['session_token'],
+            }).json() == session
+        with restarted.websocket_connect(f'/ws/{host["room_code"]}') as socket:
+            restored = authenticate(socket, friend)
+            assert restored['poll']['selected_option'] == 1
+            assert restored['poll']['options'][1]['votes'] == 1
+            assert restored['wheel'] == spin
+            assert restored['categories'][0]['activities'][0]['name'] == 'Mario Kart'
+            assert not restored['is_host']
+            assert sum(person['online'] for person in restored['participants']) == 1
+        assert restarted.post(path + f'/polls/{poll["id"]}/close', headers=headers(friend)).status_code == 403
+        assert restarted.post(path + f'/polls/{poll["id"]}/close', headers=headers(host)).status_code == 200
+    with TestClient(app) as restarted_again:
+        with restarted_again.websocket_connect(f'/ws/{host["room_code"]}') as socket:
+            restored = authenticate(socket, host)
+            assert restored['is_host']
+            assert restored['poll']['status'] == 'closed'
+            assert restored['poll']['winner_ids'] == [1]
+
+
+def test_poll_expires_during_server_downtime(tmp_path, monkeypatch):
+    monkeypatch.setenv('FASTPOLL_DB_PATH', str(tmp_path / 'rooms.sqlite3'))
+    with TestClient(app) as client:
+        host = make_room(client)
+        start(client, host, duration=30)
+        deadline = rooms[host['room_code']].poll.ends_at
+    monkeypatch.setattr(main.time, 'time', lambda: deadline + 10)
+    with TestClient(app) as restarted:
+        with restarted.websocket_connect(f'/ws/{host["room_code"]}') as socket:
+            restored = authenticate(socket, host)
+            assert restored['poll']['status'] == 'closed'
+            assert restored['poll']['time_left'] == 0
+
+
+def test_failed_save_does_not_acknowledge_or_keep_changes(client, monkeypatch):
+    import sqlite3
+    host = make_room(client)
+    def fail(*args):
+        raise sqlite3.OperationalError('disk full')
+    monkeypatch.setattr(main.store, 'save', fail)
+    response = client.post(f'/api/rooms/{host["room_code"]}/categories',
+                           headers=headers(host), json={'name': 'Unsaved'})
+    assert response.status_code == 503
+    assert not rooms[host['room_code']].categories
+    before = len(rooms)
+    assert client.post('/api/rooms', json={'name': 'Unsaved host'}).status_code == 503
+    assert len(rooms) == before

@@ -45,7 +45,11 @@ Port 8000 must be reachable from the phone. Local HTTP is for development; inter
 6. Choose **Start another poll**. The room code and participants stay; votes reset for the new poll.
 7. Return home and join the same code to resume your saved identity, host role, and vote on that installation.
 
-Closing the screen does not destroy the room. The host does not transfer automatically. Restarting the server deletes all rooms; this is still an in-memory, single-worker prototype.
+Closing the screen does not destroy the room. The host does not transfer automatically. Rooms, members, host access, join locks, the current poll and votes, wheel categories/activities, and the latest wheel result are saved automatically to SQLite. Restarting restores them; poll deadlines keep running while the server is offline. Rejoin using the same room code on the same app installation to restore your identity.
+
+The default database is `server/data/rooms.sqlite3` (ignored by Git). Set `FASTPOLL_DB_PATH` to an absolute path to use another location. Keep this file on persistent storage; stop the server before copying it for a backup. Session credentials are stored as SHA-256 digests and the database is created with owner-only permissions. Use **one Uvicorn worker**: live room state and socket broadcasts are still managed by one process. This saves the current poll/latest spin, not a full decision history.
+
+On the first upgrade from the older in-memory server, existing unsaved rooms cannot be recovered after that server stops. Create a room after restarting with this version; subsequent restarts preserve it.
 
 ## Checks
 

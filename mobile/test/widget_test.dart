@@ -521,6 +521,63 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
+  testWidgets('wheel reveals results only after each spin completes', (
+    tester,
+  ) async {
+    final snapshot = state(host: true);
+    snapshot['categories'] = [
+      {
+        'id': 'games',
+        'name': 'Games',
+        'activities': [
+          {'id': 'kart', 'name': 'Mario Kart'},
+        ],
+      },
+    ];
+    Future<void> render() async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: WheelPanel(
+                session: session,
+                room: RoomState.fromJson(snapshot),
+                enabled: true,
+                busy: false,
+                onAction: (_) async {},
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    await render();
+    for (final phase in ['category', 'activity']) {
+      snapshot['wheel'] = {
+        'spin_id': 'spin-$phase',
+        'phase': phase,
+        'selected_category_id': 'games',
+        'selected_activity_id': phase == 'activity' ? 'kart' : null,
+        'result': phase == 'category' ? 'Games' : 'Mario Kart',
+        'status': 'finished',
+      };
+      await render();
+      final title = phase == 'category'
+          ? 'Category selected'
+          : 'Activity selected';
+      expect(find.text(title), findsNothing);
+      expect(find.text('Spinning…'), findsOneWidget);
+      await tester.pump(const Duration(milliseconds: 1600));
+      await render();
+      expect(find.text(title), findsNothing);
+      await tester.pump(const Duration(milliseconds: 1700));
+      await tester.pumpAndSettle();
+      expect(find.text(title), findsOneWidget);
+      expect(find.text('Spinning…'), findsNothing);
+    }
+  });
+
   testWidgets('saving wheel category dialog during exit transition is safe', (
     tester,
   ) async {
