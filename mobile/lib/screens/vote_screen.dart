@@ -1,3 +1,6 @@
+import 'choices_screen.dart';
+import '../theme/app_theme.dart';
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -22,6 +25,7 @@ class _VoteScreenState extends State<VoteScreen> {
   late final RoomSocket _socket;
   StreamSubscription<Map<String, dynamic>>? _subscription;
   RoomState? _room;
+  final _choices = ValueNotifier<ChoicesState>((room: null, connected: false));
   bool _connected = false;
   bool _busy = false;
   bool _pendingVote = false;
@@ -66,6 +70,7 @@ class _VoteScreenState extends State<VoteScreen> {
             unawaited(SessionStore.remove(widget.session.roomCode));
         }
       });
+      _choices.value = (room: _room, connected: _connected && !_ended);
     });
     unawaited(_socket.connect());
   }
@@ -119,6 +124,7 @@ class _VoteScreenState extends State<VoteScreen> {
   @override
   void dispose() {
     _voteTimeout?.cancel();
+    _choices.dispose();
     unawaited(_subscription?.cancel());
     unawaited(_socket.close());
     super.dispose();
@@ -173,6 +179,7 @@ class _VoteScreenState extends State<VoteScreen> {
       appBar: AppBar(
         title: Text('Room ${widget.session.roomCode}'),
         actions: [
+          const AppearanceButton(),
           IconButton(
             tooltip: 'Copy room code',
             icon: const Icon(Icons.copy),
@@ -419,6 +426,14 @@ class _VoteScreenState extends State<VoteScreen> {
                         enabled: _connected && !_busy,
                         busy: _busy,
                         onAction: _control,
+                        onManage: () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => ChoicesScreen(
+                              session: widget.session,
+                              state: _choices,
+                            ),
+                          ),
+                        ),
                       ),
                     ],
                   ],
