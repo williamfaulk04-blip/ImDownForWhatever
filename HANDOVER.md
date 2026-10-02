@@ -36,14 +36,16 @@ Updated: 2026-09-24. Treat this as project context; the user's current instructi
 | `server/test_main.py` | REST/WebSocket permission, expiration, validation, polls, wheel editing/spins/broadcasts/reconnect |
 | `mobile/lib/models/poll_model.dart` | Typed session, participant, room and poll snapshots; result labels; incorporates wheel snapshot |
 | `mobile/lib/models/wheel_model.dart` | Typed category, activity, and authoritative wheel result models |
+| `mobile/lib/models/wheel_preset.dart` | Built-in editable starter sets for category/activity wheels |
 | `mobile/lib/services/api_service.dart` | REST, session persistence, socket authentication/retry, host wheel editing and spin requests |
+| `mobile/lib/screens/choices_screen.dart` | Host category/activity editor, built-in wheel starter sets, and full-page edit forms |
 | `mobile/lib/widgets/wheel_panel.dart` | Category/activity list, host editing and spins, guest observation, authoritative result display |
-| `mobile/lib/screens/home_screen.dart` | Name, create/join room, code input formatting |
+| `mobile/lib/screens/home_screen.dart` | Name, create/join room, code input formatting, recent saved rooms |
 | `mobile/lib/screens/host_screen.dart` | Poll creation form within an existing room |
 | `mobile/lib/screens/vote_screen.dart` | Room coordinator, lobby/host/voting controls, socket lifetime, results transition and back handling |
 | `mobile/lib/screens/poll_results_screen.dart` | Dedicated winner/tie/no-vote screen, tallies, back and next-poll actions |
 | `mobile/lib/widgets/room_loading_view.dart` | Bottom progress bar, current status, five-second slow-connection message |
-| `mobile/test/widget_test.dart` | UI/model/service checks using fake sockets and mock preferences/HTTP; currently 16 tests |
+| `mobile/test/widget_test.dart` | UI/model/service checks using fake sockets and mock preferences/HTTP; currently 20 tests |
 | `mobile/integration_test/widget_suite_test.dart` | Executes the same widget suite on Android |
 | `mobile/integration_test/room_journey_test.dart` | Host Flutter UI and a second real network session against a running server |
 | `.github/workflows/ci.yml` | Existing real server/mobile CI; not changed in this slice |
@@ -215,3 +217,12 @@ User requested full-page category/activity editing, a less crowded host lobby, a
 - `mobile/lib/theme/app_theme.dart`: shared cream/teal light palette and slate/teal dark palette, rounded controls, typography, and appearance menu. `FastPollApp` restores/saves the system/light/dark preference with SharedPreferences under `appearance`. Choice pages, home, and lobby expose the menu; the theme applies across all routes. Wheel labels now use theme-aware contrast.
 - Validation: Flutter analysis passed; all **20** widget/service checks passed on Android, also passed on the Android live runner with the CI test font. The theme preference test was rerun successfully after refining its menu-item finder. Native host runner was not used for this follow-up due the previously observed startup crash. Debug APK built successfully. Manual emulator review covered light/dark home/lobby/choices screens and creating a category and activity through the running local server. No backend or API changes.
 - Demo review complete: the user reported that everything looks good and authorized the development-branch commit. The running backend was preserved; restarting it is required to load any previously merged backend updates, so do not treat this UI demo as persistence-restart validation.
+
+
+### Wheel starter sets and recent rooms (2026-10-01)
+
+Added editable Food & drinks, Game night, and Out & about starter sets in the host choices page. Applying a set adds missing categories and activities through the existing host-authenticated endpoints, skips case-insensitive duplicates, preserves the room's current choices, and reports partial progress/errors. New add endpoints expose their returned room snapshot to support reliable category IDs while importing.
+
+The home screen now lists up to 12 recently entered rooms, newest first. Saved credentials continue using the existing server-scoped session keys; a separate ordered index supports the list, migrates older saved-room keys, and is cleaned up when sessions are removed or rejected by the server. Tapping a room rejoins with its saved name/token; the close action forgets that room on this device.
+
+Changed: `mobile/lib/models/wheel_preset.dart`, `mobile/lib/services/api_service.dart`, `mobile/lib/screens/choices_screen.dart`, `mobile/lib/screens/home_screen.dart`, and this handover file. Dart formatting was run. Flutter analysis/tests and emulator review were not run in this session. No commit or push made.

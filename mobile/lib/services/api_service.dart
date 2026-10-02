@@ -28,6 +28,8 @@ class ApiFailure implements Exception {
 // Scoped by server as well as code so development servers never share credentials.
 class SessionStore {
   static String _key(String code) => 'room:${ApiConfig.baseUrl}:$code';
+  static String get _historyKey => 'rooms:${ApiConfig.baseUrl}';
+
   static Future<RoomSession?> read(String code) async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_key(code));
@@ -43,11 +45,49 @@ class SessionStore {
   static Future<void> save(RoomSession session) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_key(session.roomCode), jsonEncode(session.toJson()));
+    final history = prefs.getStringList(_historyKey) ?? <String>[];
+    history.removeWhere((code) => code == session.roomCode);
+    history.insert(0, session.roomCode);
+    await prefs.setStringList(_historyKey, history.take(12).toList());
+  }
+
+  static Future<List<RoomSession>> readRecent() async {
+    final prefs = await SharedPreferences.getInstance();
+    final history = prefs.getStringList(_historyKey);
+    final codes =
+        history ??
+        prefs
+            .getKeys()
+            .where((key) => key.startsWith('room:${ApiConfig.baseUrl}:'))
+            .map((key) => key.substring('room:${ApiConfig.baseUrl}:'.length))
+            .toList();
+    final rooms = <RoomSession>[];
+    final validCodes = <String>[];
+    for (final code in codes) {
+      final session = await read(code);
+      if (session != null) {
+        rooms.add(session);
+        validCodes.add(code);
+      }
+    }
+    if (history == null || validCodes.length != history.length) {
+      await prefs.setStringList(_historyKey, validCodes.take(12).toList());
+    }
+    return rooms.take(12).toList();
   }
 
   static Future<void> remove(String code) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_key(code));
+    final history =
+        prefs.getStringList(_historyKey) ??
+        prefs
+            .getKeys()
+            .where((key) => key.startsWith('room:${ApiConfig.baseUrl}:'))
+            .map((key) => key.substring('room:${ApiConfig.baseUrl}:'.length))
+            .toList();
+    history.removeWhere((item) => item == code);
+    await prefs.setStringList(_historyKey, history.take(12).toList());
   }
 }
 
@@ -149,6 +189,18 @@ class ApiService {
   Future<void> addCategory(RoomSession session, String name) =>
       _wheelRequest(session, 'POST', '/categories', body: {'name': name});
 
+  Future<RoomState> addCategoryWithState(
+    RoomSession session,
+    String name,
+  ) async => RoomState.fromJson(
+    await _wheelStateRequest(
+      session,
+      'POST',
+      '/categories',
+      body: {'name': name},
+    ),
+  );
+
   Future<void> renameCategory(
     RoomSession session,
     String categoryId,
@@ -172,6 +224,19 @@ class ApiService {
     'POST',
     '/categories/$categoryId/activities',
     body: {'name': name},
+  );
+
+  Future<RoomState> addActivityWithState(
+    RoomSession session,
+    String categoryId,
+    String name,
+  ) async => RoomState.fromJson(
+    await _wheelStateRequest(
+      session,
+      'POST',
+      '/categories/$categoryId/activities',
+      body: {'name': name},
+    ),
   );
 
   Future<void> renameActivity(
@@ -215,6 +280,18 @@ class ApiService {
       body: body,
     );
   }
+
+  Future<Map<String, dynamic>> _wheelStateRequest(
+    RoomSession session,
+    String method,
+    String suffix, {
+    Map<String, dynamic>? body,
+  }) => _request(
+    method,
+    '/api/rooms/${session.roomCode}$suffix',
+    session: session,
+    body: body,
+  );
 
   void close() => _client.close();
 }
