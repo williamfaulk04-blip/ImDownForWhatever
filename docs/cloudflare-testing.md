@@ -12,7 +12,8 @@ uptime guarantee for Quick Tunnels.
 
 On Windows, double-click `Start Shared Test Server.cmd` in the repository root.
 On first use it downloads and verifies Cloudflare's signed executable, then it
-starts the API and tunnel. Keep the window open for the entire test.
+starts the API and tunnel on local port 8010, leaving port 8000 available for
+ordinary Android Studio development. Keep the window open for the entire test.
 
 The Python environment is still a one-time prerequisite. If the launcher reports
 that `.venv` is missing, complete the setup below once and double-click it again.

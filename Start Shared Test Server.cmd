@@ -8,7 +8,8 @@ if not exist ".tools\cloudflared.exe" (
   if errorlevel 1 goto :error
 )
 
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start-quick-tunnel.ps1"
+rem Keep port 8000 available for the normal local-development server.
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start-quick-tunnel.ps1" -Port 8010
 if errorlevel 1 goto :error
 exit /b 0
 
