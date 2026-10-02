@@ -3,6 +3,7 @@ import '../theme/app_theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../models/poll_model.dart';
 import '../services/api_service.dart';
 import 'vote_screen.dart';
 import '../widgets/room_loading_view.dart';
@@ -34,9 +35,33 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final _name = TextEditingController();
   final _code = TextEditingController();
+  List<RoomSession> _recentRooms = const [];
   bool _busy = false;
   String _loadingStatus = 'Preparing your room…';
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRecentRooms();
+  }
+
+  Future<void> _loadRecentRooms() async {
+    final rooms = await SessionStore.readRecent();
+    if (mounted) setState(() => _recentRooms = rooms);
+  }
+
+  Future<void> _forgetRoom(RoomSession room) async {
+    await SessionStore.remove(room.roomCode);
+    await _loadRecentRooms();
+  }
+
+  void _rejoinRoom(RoomSession room) {
+    _name.text = room.name;
+    _code.text = room.roomCode;
+    _enter(true);
+  }
+
   @override
   void dispose() {
     _name.dispose();
@@ -81,7 +106,10 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     } finally {
       api.close();
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() => _busy = false);
+        await _loadRecentRooms();
+      }
     }
   }
 
@@ -158,6 +186,26 @@ class _HomeScreenState extends State<HomeScreen> {
                     onPressed: _busy ? null : () => _enter(true),
                     child: const Text('Join Room'),
                   ),
+                  if (_recentRooms.isNotEmpty) ...[
+                    const Padding(
+                      padding: EdgeInsets.only(top: 28, bottom: 8),
+                      child: Text('Recent rooms'),
+                    ),
+                    for (final room in _recentRooms)
+                      Card(
+                        child: ListTile(
+                          leading: const Icon(Icons.meeting_room_outlined),
+                          title: Text('Room ${room.roomCode}'),
+                          subtitle: Text('Rejoin as ${room.name}'),
+                          onTap: _busy ? null : () => _rejoinRoom(room),
+                          trailing: IconButton(
+                            tooltip: 'Forget room ${room.roomCode}',
+                            onPressed: _busy ? null : () => _forgetRoom(room),
+                            icon: const Icon(Icons.close),
+                          ),
+                        ),
+                      ),
+                  ],
                   if (_error != null)
                     Padding(
                       padding: const EdgeInsets.only(top: 12),

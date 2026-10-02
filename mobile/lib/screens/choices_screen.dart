@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../models/poll_model.dart';
 import '../models/wheel_model.dart';
+import '../models/wheel_preset.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
 
@@ -25,10 +26,12 @@ class ChoicesScreen extends StatefulWidget {
 class _ChoicesScreenState extends State<ChoicesScreen> {
   late final ApiService _api = widget.api ?? ApiService();
   bool _deleting = false;
+  bool _importing = false;
   bool get _enabled =>
       widget.state.value.connected &&
       widget.state.value.room?.isHost == true &&
-      !_deleting;
+      !_deleting &&
+      !_importing;
 
   @override
   void dispose() {
@@ -154,6 +157,112 @@ class _ChoicesScreenState extends State<ChoicesScreen> {
     }
   }
 
+  Future<void> _choosePreset() async {
+    final preset = await showModalBottomSheet<WheelPreset>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Text(
+                'Starter wheel ideas',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+            ),
+            for (final preset in wheelPresets)
+              ListTile(
+                leading: const Icon(Icons.auto_awesome_outlined),
+                title: Text(preset.name),
+                subtitle: Text(preset.description),
+                onTap: () => Navigator.pop(context, preset),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (preset != null && mounted) await _addPreset(preset);
+  }
+
+  WheelCategory? _findCategory(RoomState room, String name) {
+    for (final category in room.categories) {
+      if (category.name.toLowerCase() == name.toLowerCase()) return category;
+    }
+    return null;
+  }
+
+  Future<void> _addPreset(WheelPreset preset) async {
+    if (!_enabled) return;
+    setState(() => _importing = true);
+    var addedCategories = 0;
+    var addedActivities = 0;
+    try {
+      var room = widget.state.value.room!;
+      for (final presetCategory in preset.categories) {
+        var category = _findCategory(room, presetCategory.name);
+        if (category == null) {
+          room = await _api.addCategoryWithState(
+            widget.session,
+            presetCategory.name,
+          );
+          addedCategories++;
+          category = _findCategory(room, presetCategory.name);
+        }
+        if (category == null) {
+          throw ApiFailure('Could not load the new category.', 500);
+        }
+        final categoryId = category.id;
+        final existingActivities = category.activities
+            .map((activity) => activity.name.toLowerCase())
+            .toSet();
+        for (final activityName in presetCategory.activities) {
+          if (existingActivities.contains(activityName.toLowerCase())) {
+            continue;
+          }
+          room = await _api.addActivityWithState(
+            widget.session,
+            categoryId,
+            activityName,
+          );
+          addedActivities++;
+          existingActivities.add(activityName.toLowerCase());
+        }
+      }
+      if (!mounted) return;
+      final added = addedCategories + addedActivities;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            added == 0
+                ? 'Those starter ideas are already in this room.'
+                : 'Added $addedCategories ${addedCategories == 1 ? 'category' : 'categories'} and $addedActivities ${addedActivities == 1 ? 'activity' : 'activities'}.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (mounted) {
+        final detail = error is ApiFailure
+            ? error.message
+            : 'Could not add all starter ideas. You can try again.';
+        final added = addedCategories + addedActivities;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              added == 0
+                  ? detail
+                  : 'Added $added items before stopping: $detail',
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _importing = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) => ValueListenableBuilder<ChoicesState>(
     valueListenable: widget.state,
@@ -185,6 +294,13 @@ class _ChoicesScreenState extends State<ChoicesScreen> {
                   ),
                 ),
               if (_deleting) const LinearProgressIndicator(),
+              if (_importing) const LinearProgressIndicator(),
+              OutlinedButton.icon(
+                onPressed: _enabled ? _choosePreset : null,
+                icon: const Icon(Icons.auto_awesome_outlined),
+                label: const Text('Add a starter set'),
+              ),
+              const SizedBox(height: 12),
               if (state.room?.categories.isEmpty ?? true)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 28),
