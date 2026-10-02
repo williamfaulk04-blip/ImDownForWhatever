@@ -1,10 +1,9 @@
-import '../theme/app_theme.dart';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/poll_model.dart';
 import '../services/api_service.dart';
+import 'settings_screen.dart';
 import 'vote_screen.dart';
 import '../widgets/room_loading_view.dart';
 
@@ -117,7 +116,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
       title: const Text('ImDownForWhatever'),
-      actions: const [AppearanceButton()],
+      actions: [SettingsButton(onClosed: _loadRecentRooms)],
     ),
     body: _busy
         ? RoomLoadingView(status: _loadingStatus)

@@ -5,7 +5,7 @@ import '../models/poll_model.dart';
 import '../models/wheel_model.dart';
 import '../models/wheel_preset.dart';
 import '../services/api_service.dart';
-import '../theme/app_theme.dart';
+import 'settings_screen.dart';
 
 typedef ChoicesState = ({RoomState? room, bool connected});
 
@@ -269,7 +269,7 @@ class _ChoicesScreenState extends State<ChoicesScreen> {
     builder: (context, state, _) => Scaffold(
       appBar: AppBar(
         title: const Text('Your choices'),
-        actions: const [AppearanceButton()],
+        actions: const [SettingsButton(canEditServer: false)],
       ),
       body: Center(
         child: ConstrainedBox(
@@ -466,7 +466,7 @@ class _ChoiceFormScreenState extends State<ChoiceFormScreen> {
     child: Scaffold(
       appBar: AppBar(
         title: Text(widget.title),
-        actions: const [AppearanceButton()],
+        actions: const [SettingsButton(canEditServer: false)],
       ),
       body: Center(
         child: ConstrainedBox(

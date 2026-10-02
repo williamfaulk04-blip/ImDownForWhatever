@@ -81,7 +81,10 @@ Map<String, dynamic> state({
 };
 
 void main() {
-  setUp(() => SharedPreferences.setMockInitialValues({}));
+  setUp(() {
+    ApiConfig.setRuntimeBaseUrl(null);
+    SharedPreferences.setMockInitialValues({});
+  });
 
   testWidgets('home validates name and normalizes pasted room codes', (
     tester,
@@ -90,6 +93,7 @@ void main() {
     await tester.binding.setSurfaceSize(const Size(800, 600));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(const FastPollApp());
+    await tester.pumpAndSettle();
     expect(find.text('Create Room'), findsOneWidget);
     await tester.tap(find.text('Create Room'));
     await tester.pump();
@@ -697,15 +701,9 @@ void main() {
   testWidgets('dark appearance persists after app restart', (tester) async {
     await tester.pumpWidget(const FastPollApp());
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Appearance'));
+    await tester.tap(find.byTooltip('Settings'));
     await tester.pumpAndSettle();
-    await tester.tap(
-      find.byWidgetPredicate(
-        (widget) =>
-            widget is CheckedPopupMenuItem<ThemeMode> &&
-            widget.value == ThemeMode.dark,
-      ),
-    );
+    await tester.tap(find.text('Dark mode'));
     await tester.pumpAndSettle();
     expect(
       tester.widget<MaterialApp>(find.byType(MaterialApp)).themeMode,
@@ -720,19 +718,57 @@ void main() {
       tester.widget<MaterialApp>(find.byType(MaterialApp)).themeMode,
       ThemeMode.dark,
     );
-    await tester.tap(find.byTooltip('Appearance'));
+    await tester.tap(find.byTooltip('Settings'));
     await tester.pumpAndSettle();
-    await tester.tap(
-      find.byWidgetPredicate(
-        (widget) =>
-            widget is CheckedPopupMenuItem<ThemeMode> &&
-            widget.value == ThemeMode.system,
-      ),
-    );
+    await tester.tap(find.text('Use device theme'));
     await tester.pumpAndSettle();
     expect(
       tester.widget<MaterialApp>(find.byType(MaterialApp)).themeMode,
       ThemeMode.system,
+    );
+  });
+
+  testWidgets('server setting validates normalizes and persists', (
+    tester,
+  ) async {
+    await tester.pumpWidget(const FastPollApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+
+    final serverField = find.widgetWithText(TextField, 'Server address');
+    await tester.enterText(serverField, 'https://shared.example.com/path');
+    await tester.tap(find.text('Save server'));
+    await tester.pump();
+    expect(
+      find.text(
+        'Enter a complete HTTP or HTTPS server address without a path.',
+      ),
+      findsOneWidget,
+    );
+
+    await tester.enterText(serverField, '  https://shared.example.com///  ');
+    await tester.tap(find.text('Save server'));
+    await tester.pumpAndSettle();
+    expect(ApiConfig.baseUrl, 'https://shared.example.com');
+    final preferences = await SharedPreferences.getInstance();
+    expect(
+      preferences.getString('server_base_url'),
+      'https://shared.example.com',
+    );
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpWidget(const FastPollApp());
+    await tester.pumpAndSettle();
+    expect(ApiConfig.baseUrl, 'https://shared.example.com');
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<TextField>(find.widgetWithText(TextField, 'Server address'))
+          .controller!
+          .text,
+      'https://shared.example.com',
     );
   });
 }

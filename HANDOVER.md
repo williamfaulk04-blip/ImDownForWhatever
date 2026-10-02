@@ -1,6 +1,6 @@
 # AI handover — ImDownForWhatever
 
-Updated: 2026-09-24. Treat this as project context; the user's current instructions take precedence.
+Updated: 2026-10-02. Treat this as project context; the user's current instructions take precedence.
 
 ## Read this first
 
@@ -33,6 +33,7 @@ Updated: 2026-09-24. Treat this as project context; the user's current instructi
 | File | Responsibility |
 |---|---|
 | `server/main.py` | Pydantic request validation, Room/Member/Poll/Wheel state, host authorization, REST, authenticated WebSocket voting, lifespan ticker |
+| `server/storage.py` | Transactional SQLite snapshots, WAL/lock settings, recovery, and readiness query |
 | `server/test_main.py` | REST/WebSocket permission, expiration, validation, polls, wheel editing/spins/broadcasts/reconnect |
 | `mobile/lib/models/poll_model.dart` | Typed session, participant, room and poll snapshots; result labels; incorporates wheel snapshot |
 | `mobile/lib/models/wheel_model.dart` | Typed category, activity, and authoritative wheel result models |
@@ -40,7 +41,9 @@ Updated: 2026-09-24. Treat this as project context; the user's current instructi
 | `mobile/lib/services/api_service.dart` | REST, session persistence, socket authentication/retry, host wheel editing and spin requests |
 | `mobile/lib/screens/choices_screen.dart` | Host category/activity editor, built-in wheel starter sets, and full-page edit forms |
 | `mobile/lib/widgets/wheel_panel.dart` | Category/activity list, host editing and spins, guest observation, authoritative result display |
-| `mobile/lib/screens/home_screen.dart` | Name, create/join room, code input formatting, recent saved rooms |
+| `mobile/lib/screens/home_screen.dart` | Name, create/join room, code input formatting, recent saved rooms, Settings entry |
+| `mobile/lib/screens/settings_screen.dart` | Runtime server address, appearance controls, validation, and active-room edit guard |
+| `mobile/lib/settings/app_settings.dart` | App-wide saved theme/server settings scope |
 | `mobile/lib/screens/host_screen.dart` | Poll creation form within an existing room |
 | `mobile/lib/screens/vote_screen.dart` | Room coordinator, lobby/host/voting controls, socket lifetime, results transition and back handling |
 | `mobile/lib/screens/poll_results_screen.dart` | Dedicated winner/tie/no-vote screen, tallies, back and next-poll actions |
@@ -48,12 +51,17 @@ Updated: 2026-09-24. Treat this as project context; the user's current instructi
 | `mobile/test/widget_test.dart` | UI/model/service checks using fake sockets and mock preferences/HTTP; currently 20 tests |
 | `mobile/integration_test/widget_suite_test.dart` | Executes the same widget suite on Android |
 | `mobile/integration_test/room_journey_test.dart` | Host Flutter UI and a second real network session against a running server |
-| `.github/workflows/ci.yml` | Existing real server/mobile CI; not changed in this slice |
+| `Dockerfile` / `render.yaml` | Portable one-worker server image and Render public HTTPS/WSS service with persistent disk |
+| `docs/deployment.md` | Provisioning, Android build, cross-network acceptance, and operations guide |
+| `scripts/start-quick-tunnel.ps1` | Local API health gate and temporary Cloudflare Quick Tunnel lifecycle |
+| `scripts/verify-public-server.py` | Public REST/WSS two-participant transport verification |
+| `docs/cloudflare-testing.md` | Free two-computer/emulator test setup and troubleshooting |
+| `.github/workflows/ci.yml` | Server/mobile checks plus production Docker image build |
 | `.github/workflows/build.yml` | Legacy README artifact workflow; not app verification |
 
 ## API contract (breaking change from the original scaffold)
 
-Base URL: `http://10.0.2.2:8000` on Android emulator. Override with `--dart-define=FASTPOLL_API_BASE=...`.
+Base URL: `http://10.0.2.2:8000` on an Android emulator for local development. Each installation can override it from Settings with an HTTP/HTTPS origin; release builds can also supply a default using `--dart-define=FASTPOLL_API_BASE=...`. The client derives WSS from HTTPS.
 
 - `GET /health` → `{"status":"healthy"}`.
 - `POST /api/rooms` with `{"name":"Alex"}` → 201 session `{room_code, session_token, name}`. No poll is created.
@@ -104,11 +112,11 @@ Snapshot shape:
 
 ## Run, check, and demo
 
-See README for normal setup commands. Use one Uvicorn worker. SQLite restores saved rooms on restart; socket connections reconnect.
+See README for local setup and `docs/deployment.md` for public deployment. Use one Uvicorn worker and one service instance. SQLite restores saved rooms on restart; socket connections reconnect.
 
 Use the environment available in your checkout:
 - Reference toolchain: Flutter 3.47.2 / Dart 3.13.2; CI uses Python 3.11. Check installed versions with `flutter --version` and `python --version`.
-- Create and activate an ignored `.venv` in the repository root, then install `server/requirements.txt`; see README for platform-specific activation commands.
+- Create and activate an ignored `.venv` in the repository root, then install `server/requirements-dev.txt`; the runtime-only pinned dependencies remain in `server/requirements.txt`. See README for platform-specific activation commands.
 - From the repository root, run `python -m uvicorn server.main:app --host 127.0.0.1 --port 8000`.
 - Discover available devices with `flutter devices`; substitute the selected ID for `<device-id>` in the commands below.
 - From `mobile/`, run `flutter analyze`, `flutter test`, and `flutter build apk --debug -t lib/main.dart`.
@@ -134,19 +142,21 @@ Demo checklist before committing:
 - Private bearer sessions are not accounts. Clearing app data or joining from another installation can create another voter; this is not abuse-proof identity. Tokens in `shared_preferences` are not encrypted secure storage. Use platform secure storage and HTTPS/WSS before a public launch.
 - No host transfer, kick/ban, permanent room close, or explicit membership deletion. Back means disconnect/away, not leave permanently.
 - Wheel results are immediate server decisions. The client animates the relevant category/activity wheel toward the authoritative selected segment; the server does not wait for animation completion.
-- No iOS/macOS/web platform scaffold; Android is the current target.
+- Android is the current supported target. An iOS scaffold exists but has not been validated; there is no macOS/web scaffold.
 - Reconnect has no jitter or application-level dead-connection timeout. A silently blackholed connection may need stronger heartbeat detection. Server send timeouts drop stale sockets from the room list.
 - Network retry/session persistence tests cover key state behavior, but airplane-mode/process-kill testing on physical phones remains outstanding.
 - Local device integration uses a host UI plus a second programmatic real WebSocket participant; it does NOT prove two physical phones work.
-- No public hosting/deployment or branch-protection change. `main` was unprotected at the earlier review; verify current settings before changing anything.
+- Public deployment configuration exists, but no hosting account has provisioned it. Public HTTPS/WSS transport passed through a temporary Cloudflare tunnel; the two-emulator UI flow on separate networks has not yet been verified. `main` was unprotected at the earlier review; verify current settings before changing anything.
 - New API is incompatible with the original app. Upgrade both server and client together.
 
 ## Next work, in order
 
-1. **Review and demo the wheel feature.** The implementation is on `codex/wheel-feature`. Complete Android device/demo validation when the SDK/device runner is available, then follow the team's established review and pull-request ownership before landing it.
-2. **Persistence and lifecycle.** Decide with the team whether a durable single-server store is enough. Separate storage access from route handlers, persist rooms/members/polls/wheel data, introduce room expiry and a deliberate host recovery policy. Multiple workers require shared broadcasts as well as a shared database; a database alone does not solve sockets. Keep tokens private at rest and in queries.
-3. **Reliability and real devices.** Run the README flow on two physical Android devices over LAN; cover app background/resume, airplane mode, failed vote confirmation, host reconnect, and server restart. Add heartbeat timeout/backoff jitter where the observed behavior warrants it. Demo the category/activity editor and both spins on Android when the SDK/device runner is available.
-4. **Team housekeeping.** Enable branch protection/required server and mobile CI checks if requested by the team; consider retiring the legacy README-only Build workflow. Pin tool/dependency versions for repeatability. Rename internal FastPoll identifiers only in a separate coordinated change if desired.
+1. **Provision and verify the public service.** After review and authorization to publish this branch, deploy `render.yaml` through a Render account, record the assigned HTTPS URL, and run the cross-network two-emulator checklist in `docs/deployment.md`. Do not claim this is live before that succeeds.
+2. **Run the free cross-network demo.** Start the Quick Tunnel launcher, run both emulators with its current URL in `FASTPOLL_API_BASE`, and complete the checklist in `docs/cloudflare-testing.md`. The automated public REST/WSS check is necessary but does not replace this two-emulator UI test.
+3. **Build the shared-server Android artifact.** Build the APK with the verified public URL in `FASTPOLL_API_BASE`, install the same artifact on both test machines, and create fresh rooms scoped to that server.
+4. **Persistence and lifecycle.** Decide whether a durable single-server store remains enough. Add room expiry and a deliberate host recovery policy. Multiple workers require shared broadcasts as well as a shared database; a database alone does not solve sockets. Keep tokens private at rest and in queries.
+5. **Reliability and real devices.** Cover app background/resume, airplane mode, failed vote confirmation, host reconnect, and server restart across real networks. Add heartbeat timeout/backoff jitter where observed behavior warrants it.
+6. **Team housekeeping.** Enable branch protection/required server and mobile CI checks if requested by the team; consider retiring the legacy README-only Build workflow. Rename internal FastPoll identifiers only in a separate coordinated change if desired.
 
 When changing the contract: update Python schemas/state, Dart parsing/service, both sides' tests, and this file together. Preserve server-side host checks, poll ID validation, first-vote semantics, and personalized selection. Never replace failing checks with placeholders to make CI green.
 
@@ -226,3 +236,28 @@ Added editable Food & drinks, Game night, and Out & about starter sets in the ho
 The home screen now lists up to 12 recently entered rooms, newest first. Saved credentials continue using the existing server-scoped session keys; a separate ordered index supports the list, migrates older saved-room keys, and is cleaned up when sessions are removed or rejected by the server. Tapping a room rejoins with its saved name/token; the close action forgets that room on this device.
 
 Changed: `mobile/lib/models/wheel_preset.dart`, `mobile/lib/services/api_service.dart`, `mobile/lib/screens/choices_screen.dart`, `mobile/lib/screens/home_screen.dart`, and this handover file. Dart formatting was run. Flutter analysis/tests and emulator review were not run in this session. No commit or push made.
+
+
+### Public API deployment readiness (2026-10-02)
+
+Work is on `codex/public-api-deployment`, created from clean, current `main`. Added a Python 3.11 `Dockerfile` with an intentional single Uvicorn worker, container health check, platform `PORT` binding, proxy-header support, and default `/data/rooms.sqlite3` path. Runtime and test dependencies are now separated and pinned; the production image installs runtime packages only. Added `.dockerignore` and a Render Blueprint that provisions one paid `0.5c-512mb` web instance, a 1 GB persistent disk, public HTTPS/WSS, and `/health` monitoring. Render is the documented first target, but the image remains portable to a host that supplies public TLS, `PORT`, and durable `/data` storage.
+
+SQLite now enables WAL mode, full synchronous commits, and a five-second busy timeout; shutdown checkpoints the WAL. `/health` performs a real database query and returns 503 when storage is unavailable. A regression test covers that failure. CI now builds the production image after server tests.
+
+Updated README and added `docs/deployment.md` with provisioning, public Android build commands, cross-network acceptance steps, persistence/backup guidance, and the one-instance limitation. Local validation: Python compilation passed and all **22** server tests passed (two dependency deprecation warnings). Docker is not installed on this workstation, so the image was not built locally; CI now owns that check. The deployment has **not** been provisioned in a hosting account, no public URL exists yet, and separate-network emulators have **not** been tested. Do not claim the service is live until the Blueprint is deployed and the documented acceptance test succeeds. No commit or push has been made; follow the required demo/review authorization flow first.
+
+
+### Free Cloudflare cross-network test (2026-10-02)
+
+Added a Windows-only, account-free Quick Tunnel workflow. `Start Shared Test Server.cmd` is the double-click entry point and installs the tunnel executable on first use. `scripts/install-cloudflared.ps1` downloads the official 64-bit executable into ignored `.tools`, verifies a valid Cloudflare Authenticode signature, and does not install a service. `scripts/start-quick-tunnel.ps1` refuses occupied ports, starts one local API worker, waits for the database-backed health check, uses `%LOCALAPPDATA%\ImDownForWhatever\rooms.sqlite3`, launches the tunnel, prints the URL/build command, and cleans up both processes and temporary logs on exit. `scripts/verify-public-server.py` creates a disposable room through public HTTPS and verifies two authenticated WSS clients both receive the same two-person state. Added `docs/cloudflare-testing.md` and linked it from README.
+
+Validation: both PowerShell files parsed successfully; `cloudflared` 2026.9.3 downloaded and passed publisher verification; the corrected launcher started Uvicorn on port 8010; the public `/health` endpoint returned `{"status":"healthy"}`; and the public REST/WSS verifier passed with two participants. The first launcher attempt revealed and fixed an occupied-port/false-health race and repository-database permission collision; the launcher now rejects occupied ports and keeps tunnel data in the user's local app-data directory. The tunnel is temporary and two real emulators on separate networks have **not** yet completed the UI acceptance test. No commit or push has been made.
+
+
+### In-app connection and appearance settings (2026-10-02)
+
+Added a Settings page accessible from the home, lobby, and choices app bars. It owns both connection and appearance preferences: users can enter an HTTP/HTTPS server origin, save it locally, reset to the build default, and select device, light, or dark appearance. Server editing is disabled while a room is active so an in-progress room cannot silently switch backends. URL validation rejects credentials, paths, queries, fragments, and unsupported schemes, while normalizing trailing slashes. Saved room credentials remain isolated by normalized server URL.
+
+`FastPollApp` loads the saved preferences before showing the home screen and persists them with SharedPreferences. `ApiConfig` now supports the runtime override while retaining `FASTPOLL_API_BASE` as the build-time default. Updated README, deployment guidance, Cloudflare testing instructions, and launcher output so testers can paste each temporary tunnel URL into Settings without rebuilding the app.
+
+Validation: Dart formatting completed; Flutter analysis reported no issues; all **21** Flutter tests passed, including server URL validation, normalization, persistence, and appearance persistence. A debug APK was built, installed, and launched on `emulator-5554`; the Settings screen was manually checked through Android UI accessibility output with the active Cloudflare URL populated and all connection/appearance controls present. Public REST/WSS verification still covers two independent participants, but the full two-emulator, separate-network UI acceptance test remains outstanding. No commit or push has been made.

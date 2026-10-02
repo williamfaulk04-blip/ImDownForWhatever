@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: imdownforwhatever-api
+    runtime: docker
+    plan: 0.5c-512mb
+    numInstances: 1
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: FASTPOLL_DB_PATH
+        value: /data/rooms.sqlite3
+    disk:
+      name: room-data
+      mountPath: /data
+      sizeGB: 1

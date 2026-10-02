@@ -282,6 +282,12 @@ def _session(room: Room, token: str) -> dict:
 
 @app.get("/health")
 async def health():
+    if store is None:
+        raise HTTPException(503, "Room storage is not ready.")
+    try:
+        store.check()
+    except sqlite3.Error as error:
+        raise HTTPException(503, "Room storage is not ready.") from error
     return {"status": "healthy"}
 
 

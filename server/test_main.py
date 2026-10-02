@@ -70,6 +70,18 @@ def test_health_and_empty_lobby(client):
         assert host['session_token'] not in str(state)
 
 
+def test_health_reports_storage_failure(client, monkeypatch):
+    import sqlite3
+
+    def fail():
+        raise sqlite3.OperationalError('disk unavailable')
+
+    monkeypatch.setattr(main.store, 'check', fail)
+    response = client.get('/health')
+    assert response.status_code == 503
+    assert response.json() == {'detail': 'Room storage is not ready.'}
+
+
 def test_host_permissions_lock_and_resume(client):
     host = make_room(client)
     friend = join(client, host)

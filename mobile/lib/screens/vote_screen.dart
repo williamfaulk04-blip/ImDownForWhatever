@@ -1,5 +1,4 @@
 import 'choices_screen.dart';
-import '../theme/app_theme.dart';
 
 import 'dart:async';
 
@@ -10,6 +9,7 @@ import '../models/poll_model.dart';
 import '../services/api_service.dart';
 import 'host_screen.dart';
 import 'poll_results_screen.dart';
+import 'settings_screen.dart';
 import '../widgets/room_loading_view.dart';
 import '../widgets/wheel_panel.dart';
 
@@ -179,7 +179,7 @@ class _VoteScreenState extends State<VoteScreen> {
       appBar: AppBar(
         title: Text('Room ${widget.session.roomCode}'),
         actions: [
-          const AppearanceButton(),
+          const SettingsButton(canEditServer: false),
           IconButton(
             tooltip: 'Copy room code',
             icon: const Icon(Icons.copy),

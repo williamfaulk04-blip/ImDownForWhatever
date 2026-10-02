@@ -13,6 +13,12 @@ class RoomStore:
         os.close(descriptor)
         os.chmod(path, 0o600)
         self.connection = sqlite3.connect(path, check_same_thread=False)
+        # WAL keeps readers from blocking the short snapshot writes. The busy
+        # timeout gives an in-progress write time to finish instead of turning
+        # a brief lock into a user-visible save failure.
+        self.connection.execute('PRAGMA journal_mode=WAL')
+        self.connection.execute('PRAGMA synchronous=FULL')
+        self.connection.execute('PRAGMA busy_timeout=5000')
         self.connection.execute(
             'CREATE TABLE IF NOT EXISTS rooms (code TEXT PRIMARY KEY, payload TEXT NOT NULL)'
         )
@@ -38,5 +44,9 @@ class RoomStore:
         payload = self.saved.get(code)
         return json.loads(payload) if payload is not None else None
 
+    def check(self):
+        self.connection.execute('SELECT 1').fetchone()
+
     def close(self):
+        self.connection.execute('PRAGMA wal_checkpoint(TRUNCATE)')
         self.connection.close()

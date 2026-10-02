@@ -10,11 +10,38 @@ import '../models/poll_model.dart';
 
 class ApiConfig {
   static const _configuredBase = String.fromEnvironment('FASTPOLL_API_BASE');
-  static String get baseUrl => _configuredBase.isNotEmpty
+  static String? _runtimeBase;
+
+  static String get defaultBaseUrl => _configuredBase.isNotEmpty
       ? _configuredBase
       : Platform.isAndroid
       ? 'http://10.0.2.2:8000'
       : 'http://localhost:8000';
+
+  static String get baseUrl => _runtimeBase ?? defaultBaseUrl;
+
+  static bool get usesRuntimeBaseUrl => _runtimeBase != null;
+
+  static void setRuntimeBaseUrl(String? value) {
+    _runtimeBase = value == null ? null : normalizeBaseUrl(value);
+  }
+
+  static String normalizeBaseUrl(String value) {
+    final normalized = value.trim().replaceFirst(RegExp(r'/+$'), '');
+    final uri = Uri.tryParse(normalized);
+    if (uri == null ||
+        !uri.hasAuthority ||
+        (uri.scheme != 'http' && uri.scheme != 'https') ||
+        (uri.path.isNotEmpty && uri.path != '/') ||
+        uri.hasQuery ||
+        uri.hasFragment ||
+        uri.userInfo.isNotEmpty) {
+      throw const FormatException(
+        'Enter a complete HTTP or HTTPS server address without a path.',
+      );
+    }
+    return normalized;
+  }
 }
 
 class ApiFailure implements Exception {
